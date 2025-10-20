@@ -1,0 +1,9 @@
+/data/data/com.termux/files/home/echo-node/daemon/target/release/deps/iana_time_zone-4bc9509396cda967.d: /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/lib.rs /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/ffi_utils.rs /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/tz_android.rs
+
+/data/data/com.termux/files/home/echo-node/daemon/target/release/deps/libiana_time_zone-4bc9509396cda967.rlib: /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/lib.rs /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/ffi_utils.rs /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/tz_android.rs
+
+/data/data/com.termux/files/home/echo-node/daemon/target/release/deps/libiana_time_zone-4bc9509396cda967.rmeta: /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/lib.rs /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/ffi_utils.rs /data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/tz_android.rs
+
+/data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/lib.rs:
+/data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/ffi_utils.rs:
+/data/data/com.termux/files/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.64/src/tz_android.rs:

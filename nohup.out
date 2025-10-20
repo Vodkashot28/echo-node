@@ -1,0 +1,2110 @@
+🔮 EchoMesh Fused Daemon Initialized (Devnet)
+--------------------------------------------------
+Node Identity: Jnalair_Constructor_Devnode | Region: Asia/Tokyo
+Node Owner X: x.com/jn_alair
+Solana RPC Target: https://api.devnet.solana.com
+Solana WS Target: wss://api.devnet.solana.com
+Artifact Storage Path: /data/echomesh_artifacts
+Max Storage Capacity: 512 GB
+Host Optimization: CPU Cores 8 | RAM 32 GB | GPU Offload Enabled
+Purity Stake Auto-Enabled: true
+Ritual Cycle Interval: 5 seconds
+Domain Purity Threshold: 60%
+--------------------------------------------------
+[11:40:16] Ritual: 11.24 MB → 1.29 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:40:21] Ritual: 29.66 MB → 3.41 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:40:26] Ritual: 29.21 MB → 3.36 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:40:31] Ritual: 37.23 MB → 4.28 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:40:36] Ritual: 47.75 MB → 5.49 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:40:41] Ritual: 32.26 MB → 3.71 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:40:46] Ritual: 17.30 MB → 1.99 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:40:51] Ritual: 39.16 MB → 4.50 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:40:56] Ritual: 43.17 MB → 4.96 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:01] Ritual: 43.76 MB → 5.03 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:06] Ritual: 20.87 MB → 2.40 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:11] Ritual: 19.87 MB → 2.28 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:16] Ritual: 10.61 MB → 1.22 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:21] Ritual: 41.29 MB → 4.75 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:26] Ritual: 27.84 MB → 3.20 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:31] Ritual: 38.06 MB → 4.38 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:36] Ritual: 36.24 MB → 4.17 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:41] Ritual: 30.79 MB → 3.54 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:46] Ritual: 20.83 MB → 2.40 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:51] Ritual: 37.63 MB → 4.33 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:41:56] Ritual: 42.88 MB → 4.93 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:01] Ritual: 39.54 MB → 4.55 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:06] Ritual: 38.96 MB → 4.48 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:11] Ritual: 16.67 MB → 1.92 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:16] Ritual: 36.65 MB → 4.21 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:21] Ritual: 49.70 MB → 5.72 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:26] Ritual: 44.96 MB → 5.17 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:31] Ritual: 35.15 MB → 4.04 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:36] Ritual: 48.13 MB → 5.54 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:41] Ritual: 32.19 MB → 3.70 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:46] Ritual: 27.58 MB → 3.17 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:51] Ritual: 45.05 MB → 5.18 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:42:56] Ritual: 32.94 MB → 3.79 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:01] Ritual: 46.04 MB → 5.29 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:06] Ritual: 20.86 MB → 2.40 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:11] Ritual: 25.36 MB → 2.92 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:16] Ritual: 30.87 MB → 3.55 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:21] Ritual: 24.76 MB → 2.85 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:26] Ritual: 14.24 MB → 1.64 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:31] Ritual: 34.20 MB → 3.93 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:36] Ritual: 30.76 MB → 3.54 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:41] Ritual: 43.53 MB → 5.01 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:46] Ritual: 35.94 MB → 4.13 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:51] Ritual: 46.98 MB → 5.40 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:43:56] Ritual: 18.05 MB → 2.08 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:01] Ritual: 49.90 MB → 5.74 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:06] Ritual: 25.71 MB → 2.96 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:11] Ritual: 12.33 MB → 1.42 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:16] Ritual: 36.62 MB → 4.21 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:21] Ritual: 47.35 MB → 5.45 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:26] Ritual: 41.73 MB → 4.80 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:31] Ritual: 15.34 MB → 1.76 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:36] Ritual: 47.26 MB → 5.44 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:41] Ritual: 36.10 MB → 4.15 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:46] Ritual: 21.35 MB → 2.46 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:51] Ritual: 24.39 MB → 2.80 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:44:56] Ritual: 34.79 MB → 4.00 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:01] Ritual: 26.09 MB → 3.00 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:06] Ritual: 22.36 MB → 2.57 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:11] Ritual: 36.67 MB → 4.22 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:16] Ritual: 20.85 MB → 2.40 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:21] Ritual: 33.98 MB → 3.91 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:26] Ritual: 42.13 MB → 4.84 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:31] Ritual: 13.18 MB → 1.52 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:36] Ritual: 39.14 MB → 4.50 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:41] Ritual: 37.93 MB → 4.36 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:46] Ritual: 25.33 MB → 2.91 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:51] Ritual: 35.87 MB → 4.13 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:45:56] Ritual: 34.92 MB → 4.02 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:01] Ritual: 31.30 MB → 3.60 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:06] Ritual: 41.77 MB → 4.80 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:11] Ritual: 35.41 MB → 4.07 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:16] Ritual: 11.53 MB → 1.33 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:21] Ritual: 10.23 MB → 1.18 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:26] Ritual: 45.09 MB → 5.19 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:31] Ritual: 12.90 MB → 1.48 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:36] Ritual: 18.20 MB → 2.09 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:41] Ritual: 13.17 MB → 1.51 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:46] Ritual: 20.50 MB → 2.36 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:51] Ritual: 37.49 MB → 4.31 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:46:56] Ritual: 40.06 MB → 4.61 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:01] Ritual: 32.78 MB → 3.77 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:06] Ritual: 10.43 MB → 1.20 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:11] Ritual: 25.94 MB → 2.98 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:16] Ritual: 32.95 MB → 3.79 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:21] Ritual: 41.18 MB → 4.74 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:26] Ritual: 24.21 MB → 2.78 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:31] Ritual: 44.24 MB → 5.09 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:36] Ritual: 21.04 MB → 2.42 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:41] Ritual: 13.88 MB → 1.60 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:46] Ritual: 24.96 MB → 2.87 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:51] Ritual: 35.55 MB → 4.09 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:47:56] Ritual: 37.46 MB → 4.31 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:01] Ritual: 48.28 MB → 5.55 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:06] Ritual: 47.75 MB → 5.49 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:11] Ritual: 13.85 MB → 1.59 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:16] Ritual: 46.50 MB → 5.35 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:21] Ritual: 25.02 MB → 2.88 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:26] Ritual: 44.13 MB → 5.08 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:31] Ritual: 15.41 MB → 1.77 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:36] Ritual: 36.07 MB → 4.15 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:41] Ritual: 38.28 MB → 4.40 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:46] Ritual: 26.63 MB → 3.06 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:51] Ritual: 48.45 MB → 5.57 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:48:56] Ritual: 11.21 MB → 1.29 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:01] Ritual: 11.39 MB → 1.31 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:06] Ritual: 35.72 MB → 4.11 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:11] Ritual: 34.74 MB → 3.99 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:16] Ritual: 44.78 MB → 5.15 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:21] Ritual: 19.60 MB → 2.25 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:26] Ritual: 39.37 MB → 4.53 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:31] Ritual: 46.63 MB → 5.36 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:36] Ritual: 45.42 MB → 5.22 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:41] Ritual: 34.35 MB → 3.95 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:46] Ritual: 14.39 MB → 1.66 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:51] Ritual: 34.93 MB → 4.02 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:49:56] Ritual: 19.15 MB → 2.20 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:01] Ritual: 10.10 MB → 1.16 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:06] Ritual: 11.07 MB → 1.27 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:11] Ritual: 10.13 MB → 1.17 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:16] Ritual: 29.70 MB → 3.42 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:21] Ritual: 11.08 MB → 1.27 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:26] Ritual: 43.37 MB → 4.99 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:31] Ritual: 31.38 MB → 3.61 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:36] Ritual: 25.08 MB → 2.88 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:41] Ritual: 22.85 MB → 2.63 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:46] Ritual: 18.37 MB → 2.11 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:51] Ritual: 30.10 MB → 3.46 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:50:56] Ritual: 36.69 MB → 4.22 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:01] Ritual: 16.53 MB → 1.90 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:06] Ritual: 41.49 MB → 4.77 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:11] Ritual: 32.37 MB → 3.72 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:16] Ritual: 19.51 MB → 2.24 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:21] Ritual: 43.34 MB → 4.98 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:26] Ritual: 24.39 MB → 2.81 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:31] Ritual: 32.22 MB → 3.71 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:36] Ritual: 34.43 MB → 3.96 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:41] Ritual: 40.40 MB → 4.65 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:46] Ritual: 22.03 MB → 2.53 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:51] Ritual: 32.21 MB → 3.70 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:51:56] Ritual: 23.03 MB → 2.65 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:01] Ritual: 46.72 MB → 5.37 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:06] Ritual: 32.93 MB → 3.79 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:11] Ritual: 37.41 MB → 4.30 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:16] Ritual: 45.06 MB → 5.18 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:21] Ritual: 22.23 MB → 2.56 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:26] Ritual: 38.63 MB → 4.44 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:31] Ritual: 48.03 MB → 5.52 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:36] Ritual: 47.81 MB → 5.50 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:41] Ritual: 39.90 MB → 4.59 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:46] Ritual: 31.33 MB → 3.60 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:51] Ritual: 41.01 MB → 4.72 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:52:56] Ritual: 33.57 MB → 3.86 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:01] Ritual: 13.33 MB → 1.53 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:06] Ritual: 18.68 MB → 2.15 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:11] Ritual: 38.76 MB → 4.46 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:16] Ritual: 38.20 MB → 4.39 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:21] Ritual: 37.45 MB → 4.31 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:26] Ritual: 21.42 MB → 2.46 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:31] Ritual: 49.18 MB → 5.66 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:36] Ritual: 25.68 MB → 2.95 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:41] Ritual: 15.92 MB → 1.83 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:46] Ritual: 19.69 MB → 2.26 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:51] Ritual: 25.87 MB → 2.98 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:53:56] Ritual: 30.09 MB → 3.46 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:01] Ritual: 36.09 MB → 4.15 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:06] Ritual: 11.43 MB → 1.31 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:11] Ritual: 39.91 MB → 4.59 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:16] Ritual: 28.33 MB → 3.26 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:21] Ritual: 16.28 MB → 1.87 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:26] Ritual: 40.92 MB → 4.71 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:31] Ritual: 40.45 MB → 4.65 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:36] Ritual: 42.99 MB → 4.94 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:41] Ritual: 10.17 MB → 1.17 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:46] Ritual: 33.24 MB → 3.82 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:51] Ritual: 27.63 MB → 3.18 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:54:56] Ritual: 40.19 MB → 4.62 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:01] Ritual: 16.58 MB → 1.91 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:06] Ritual: 31.49 MB → 3.62 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:11] Ritual: 47.69 MB → 5.48 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:16] Ritual: 47.40 MB → 5.45 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:21] Ritual: 16.79 MB → 1.93 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:26] Ritual: 45.33 MB → 5.21 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:31] Ritual: 26.22 MB → 3.02 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:36] Ritual: 29.45 MB → 3.39 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:41] Ritual: 49.06 MB → 5.64 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:46] Ritual: 32.78 MB → 3.77 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:51] Ritual: 33.56 MB → 3.86 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:55:56] Ritual: 11.07 MB → 1.27 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:01] Ritual: 12.51 MB → 1.44 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:06] Ritual: 21.45 MB → 2.47 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:11] Ritual: 35.28 MB → 4.06 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:16] Ritual: 47.46 MB → 5.46 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:21] Ritual: 31.82 MB → 3.66 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:26] Ritual: 16.08 MB → 1.85 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:31] Ritual: 19.62 MB → 2.26 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:36] Ritual: 46.37 MB → 5.33 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:41] Ritual: 13.08 MB → 1.50 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:46] Ritual: 25.17 MB → 2.89 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:51] Ritual: 25.04 MB → 2.88 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:56:56] Ritual: 49.67 MB → 5.71 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:01] Ritual: 39.71 MB → 4.57 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:06] Ritual: 16.39 MB → 1.88 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:11] Ritual: 21.46 MB → 2.47 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:16] Ritual: 17.85 MB → 2.05 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:21] Ritual: 16.28 MB → 1.87 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:26] Ritual: 19.20 MB → 2.21 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:31] Ritual: 41.95 MB → 4.82 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:36] Ritual: 46.86 MB → 5.39 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:41] Ritual: 12.06 MB → 1.39 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:46] Ritual: 30.32 MB → 3.49 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:51] Ritual: 39.42 MB → 4.53 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:57:56] Ritual: 17.31 MB → 1.99 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:01] Ritual: 18.08 MB → 2.08 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:06] Ritual: 47.06 MB → 5.41 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:11] Ritual: 45.73 MB → 5.26 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:16] Ritual: 44.68 MB → 5.14 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:21] Ritual: 13.87 MB → 1.59 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:26] Ritual: 32.33 MB → 3.72 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:31] Ritual: 27.40 MB → 3.15 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:36] Ritual: 37.93 MB → 4.36 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:41] Ritual: 25.85 MB → 2.97 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:46] Ritual: 38.42 MB → 4.42 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:51] Ritual: 30.70 MB → 3.53 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:58:56] Ritual: 36.26 MB → 4.17 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:01] Ritual: 49.40 MB → 5.68 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:06] Ritual: 49.26 MB → 5.67 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:11] Ritual: 35.13 MB → 4.04 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:16] Ritual: 35.90 MB → 4.13 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:21] Ritual: 10.60 MB → 1.22 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:26] Ritual: 33.48 MB → 3.85 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:31] Ritual: 34.20 MB → 3.93 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:36] Ritual: 19.13 MB → 2.20 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:41] Ritual: 17.36 MB → 2.00 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:46] Ritual: 48.43 MB → 5.57 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:51] Ritual: 31.97 MB → 3.68 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[11:59:56] Ritual: 22.13 MB → 2.55 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:01] Ritual: 44.31 MB → 5.10 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:06] Ritual: 31.11 MB → 3.58 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:11] Ritual: 43.46 MB → 5.00 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:16] Ritual: 11.57 MB → 1.33 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:21] Ritual: 36.17 MB → 4.16 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:26] Ritual: 13.74 MB → 1.58 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:31] Ritual: 19.20 MB → 2.21 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:36] Ritual: 16.77 MB → 1.93 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:41] Ritual: 27.06 MB → 3.11 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:46] Ritual: 49.28 MB → 5.67 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:51] Ritual: 38.88 MB → 4.47 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:00:56] Ritual: 29.75 MB → 3.42 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:01] Ritual: 10.98 MB → 1.26 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:06] Ritual: 34.63 MB → 3.98 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:11] Ritual: 27.71 MB → 3.19 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:16] Ritual: 26.19 MB → 3.01 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:21] Ritual: 18.56 MB → 2.13 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:26] Ritual: 19.09 MB → 2.19 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:31] Ritual: 42.41 MB → 4.88 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:36] Ritual: 16.43 MB → 1.89 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:41] Ritual: 15.80 MB → 1.82 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:46] Ritual: 26.10 MB → 3.00 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:51] Ritual: 34.22 MB → 3.94 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:01:56] Ritual: 28.50 MB → 3.28 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:01] Ritual: 41.32 MB → 4.75 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:06] Ritual: 20.42 MB → 2.35 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:11] Ritual: 47.37 MB → 5.45 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:16] Ritual: 46.22 MB → 5.32 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:21] Ritual: 19.76 MB → 2.27 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:26] Ritual: 45.23 MB → 5.20 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:31] Ritual: 42.56 MB → 4.89 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:36] Ritual: 41.47 MB → 4.77 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:41] Ritual: 16.79 MB → 1.93 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:46] Ritual: 37.93 MB → 4.36 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:51] Ritual: 36.86 MB → 4.24 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:02:56] Ritual: 47.06 MB → 5.41 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:01] Ritual: 42.10 MB → 4.84 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:06] Ritual: 12.07 MB → 1.39 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:11] Ritual: 36.09 MB → 4.15 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:16] Ritual: 18.50 MB → 2.13 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:21] Ritual: 24.92 MB → 2.87 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:26] Ritual: 10.37 MB → 1.19 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:31] Ritual: 39.58 MB → 4.55 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:36] Ritual: 37.68 MB → 4.33 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:41] Ritual: 28.64 MB → 3.29 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:46] Ritual: 38.66 MB → 4.45 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:51] Ritual: 29.69 MB → 3.41 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:03:56] Ritual: 22.48 MB → 2.59 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:01] Ritual: 13.23 MB → 1.52 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:06] Ritual: 29.11 MB → 3.35 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:11] Ritual: 17.58 MB → 2.02 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:16] Ritual: 25.93 MB → 2.98 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:21] Ritual: 49.86 MB → 5.73 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:26] Ritual: 17.45 MB → 2.01 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:31] Ritual: 22.14 MB → 2.55 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:36] Ritual: 15.59 MB → 1.79 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:41] Ritual: 49.58 MB → 5.70 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:46] Ritual: 36.20 MB → 4.16 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:51] Ritual: 11.71 MB → 1.35 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:04:56] Ritual: 46.22 MB → 5.32 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:01] Ritual: 21.81 MB → 2.51 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:06] Ritual: 20.11 MB → 2.31 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:11] Ritual: 36.54 MB → 4.20 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:16] Ritual: 18.84 MB → 2.17 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:21] Ritual: 36.59 MB → 4.21 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:26] Ritual: 12.60 MB → 1.45 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:31] Ritual: 46.25 MB → 5.32 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:36] Ritual: 45.57 MB → 5.24 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:41] Ritual: 10.70 MB → 1.23 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:46] Ritual: 15.86 MB → 1.82 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:51] Ritual: 47.34 MB → 5.44 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:05:56] Ritual: 41.03 MB → 4.72 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:01] Ritual: 25.22 MB → 2.90 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:06] Ritual: 36.46 MB → 4.19 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:11] Ritual: 23.24 MB → 2.67 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:16] Ritual: 26.59 MB → 3.06 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:21] Ritual: 27.76 MB → 3.19 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:26] Ritual: 13.14 MB → 1.51 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:31] Ritual: 19.85 MB → 2.28 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:36] Ritual: 41.22 MB → 4.74 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:41] Ritual: 12.70 MB → 1.46 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:46] Ritual: 16.48 MB → 1.90 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:51] Ritual: 40.56 MB → 4.66 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:06:56] Ritual: 18.81 MB → 2.16 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:01] Ritual: 32.17 MB → 3.70 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:06] Ritual: 21.11 MB → 2.43 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:11] Ritual: 10.23 MB → 1.18 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:16] Ritual: 40.09 MB → 4.61 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:21] Ritual: 25.96 MB → 2.99 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:26] Ritual: 47.45 MB → 5.46 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:31] Ritual: 12.64 MB → 1.45 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:36] Ritual: 48.49 MB → 5.58 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:41] Ritual: 13.01 MB → 1.50 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:46] Ritual: 43.05 MB → 4.95 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:51] Ritual: 18.24 MB → 2.10 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:07:56] Ritual: 38.54 MB → 4.43 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:01] Ritual: 21.74 MB → 2.50 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:06] Ritual: 19.13 MB → 2.20 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:11] Ritual: 14.96 MB → 1.72 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:16] Ritual: 22.96 MB → 2.64 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:21] Ritual: 33.41 MB → 3.84 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:26] Ritual: 45.61 MB → 5.25 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:31] Ritual: 32.47 MB → 3.73 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:36] Ritual: 44.46 MB → 5.11 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:41] Ritual: 39.59 MB → 4.55 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:46] Ritual: 15.92 MB → 1.83 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:51] Ritual: 11.83 MB → 1.36 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:08:56] Ritual: 37.11 MB → 4.27 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:01] Ritual: 31.55 MB → 3.63 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:06] Ritual: 33.64 MB → 3.87 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:11] Ritual: 41.44 MB → 4.77 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:16] Ritual: 25.88 MB → 2.98 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:21] Ritual: 22.69 MB → 2.61 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:26] Ritual: 22.65 MB → 2.60 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:31] Ritual: 13.00 MB → 1.50 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:36] Ritual: 21.86 MB → 2.51 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:41] Ritual: 11.85 MB → 1.36 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:46] Ritual: 48.54 MB → 5.58 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:51] Ritual: 27.64 MB → 3.18 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:09:56] Ritual: 14.32 MB → 1.65 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:01] Ritual: 28.83 MB → 3.31 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:06] Ritual: 21.72 MB → 2.50 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:11] Ritual: 32.52 MB → 3.74 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:16] Ritual: 31.81 MB → 3.66 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:21] Ritual: 19.51 MB → 2.24 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:26] Ritual: 37.53 MB → 4.32 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:31] Ritual: 35.41 MB → 4.07 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:36] Ritual: 43.34 MB → 4.98 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:41] Ritual: 32.56 MB → 3.74 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:46] Ritual: 30.37 MB → 3.49 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:51] Ritual: 14.98 MB → 1.72 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:10:56] Ritual: 36.81 MB → 4.23 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:01] Ritual: 34.47 MB → 3.96 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:06] Ritual: 21.78 MB → 2.50 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:11] Ritual: 46.40 MB → 5.34 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:16] Ritual: 10.79 MB → 1.24 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:21] Ritual: 31.71 MB → 3.65 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:26] Ritual: 13.53 MB → 1.56 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:31] Ritual: 44.64 MB → 5.13 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:36] Ritual: 15.32 MB → 1.76 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:41] Ritual: 46.42 MB → 5.34 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:46] Ritual: 48.94 MB → 5.63 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:51] Ritual: 15.02 MB → 1.73 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:11:56] Ritual: 34.69 MB → 3.99 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:01] Ritual: 42.11 MB → 4.84 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:06] Ritual: 10.77 MB → 1.24 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:11] Ritual: 26.61 MB → 3.06 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:16] Ritual: 20.61 MB → 2.37 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:21] Ritual: 24.66 MB → 2.84 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:26] Ritual: 34.34 MB → 3.95 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:31] Ritual: 35.33 MB → 4.06 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:36] Ritual: 41.61 MB → 4.78 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:41] Ritual: 20.46 MB → 2.35 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:46] Ritual: 42.29 MB → 4.86 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:51] Ritual: 37.50 MB → 4.31 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:12:56] Ritual: 17.48 MB → 2.01 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:01] Ritual: 37.72 MB → 4.34 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:06] Ritual: 36.39 MB → 4.18 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:11] Ritual: 14.35 MB → 1.65 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:16] Ritual: 25.49 MB → 2.93 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:21] Ritual: 33.84 MB → 3.89 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:26] Ritual: 42.13 MB → 4.85 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:31] Ritual: 35.43 MB → 4.07 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:36] Ritual: 24.18 MB → 2.78 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:41] Ritual: 32.48 MB → 3.74 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:46] Ritual: 25.16 MB → 2.89 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:51] Ritual: 18.63 MB → 2.14 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:13:56] Ritual: 25.98 MB → 2.99 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:01] Ritual: 39.90 MB → 4.59 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:06] Ritual: 40.91 MB → 4.71 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:11] Ritual: 35.18 MB → 4.05 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:16] Ritual: 33.37 MB → 3.84 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:21] Ritual: 39.04 MB → 4.49 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:26] Ritual: 33.13 MB → 3.81 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:31] Ritual: 42.61 MB → 4.90 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:36] Ritual: 33.84 MB → 3.89 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:41] Ritual: 25.53 MB → 2.94 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:46] Ritual: 14.26 MB → 1.64 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:51] Ritual: 20.21 MB → 2.32 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:14:56] Ritual: 11.33 MB → 1.30 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:01] Ritual: 13.56 MB → 1.56 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:06] Ritual: 28.34 MB → 3.26 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:11] Ritual: 23.39 MB → 2.69 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:16] Ritual: 13.70 MB → 1.58 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:21] Ritual: 32.28 MB → 3.71 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:26] Ritual: 13.29 MB → 1.53 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:31] Ritual: 48.79 MB → 5.61 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:36] Ritual: 43.40 MB → 4.99 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:41] Ritual: 17.89 MB → 2.06 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:46] Ritual: 37.35 MB → 4.30 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:51] Ritual: 45.57 MB → 5.24 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:15:56] Ritual: 26.70 MB → 3.07 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:01] Ritual: 25.00 MB → 2.88 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:06] Ritual: 25.90 MB → 2.98 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:11] Ritual: 13.44 MB → 1.55 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:16] Ritual: 10.08 MB → 1.16 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:21] Ritual: 40.68 MB → 4.68 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:26] Ritual: 45.81 MB → 5.27 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:31] Ritual: 12.34 MB → 1.42 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:36] Ritual: 20.16 MB → 2.32 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:41] Ritual: 48.16 MB → 5.54 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:46] Ritual: 41.05 MB → 4.72 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:51] Ritual: 29.71 MB → 3.42 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:16:56] Ritual: 22.48 MB → 2.59 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:01] Ritual: 31.36 MB → 3.61 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:06] Ritual: 46.98 MB → 5.40 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:11] Ritual: 46.30 MB → 5.32 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:16] Ritual: 34.92 MB → 4.02 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:21] Ritual: 40.14 MB → 4.62 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:26] Ritual: 47.33 MB → 5.44 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:31] Ritual: 38.92 MB → 4.48 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:36] Ritual: 13.01 MB → 1.50 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:41] Ritual: 24.29 MB → 2.79 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:46] Ritual: 45.51 MB → 5.23 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:51] Ritual: 10.23 MB → 1.18 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:17:56] Ritual: 48.08 MB → 5.53 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:01] Ritual: 27.85 MB → 3.20 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:06] Ritual: 31.76 MB → 3.65 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:11] Ritual: 19.21 MB → 2.21 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:16] Ritual: 13.81 MB → 1.59 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:21] Ritual: 44.35 MB → 5.10 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:26] Ritual: 11.74 MB → 1.35 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:31] Ritual: 41.32 MB → 4.75 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:36] Ritual: 32.64 MB → 3.75 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:41] Ritual: 44.97 MB → 5.17 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:46] Ritual: 27.64 MB → 3.18 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:51] Ritual: 14.40 MB → 1.66 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:18:56] Ritual: 16.47 MB → 1.89 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:01] Ritual: 20.36 MB → 2.34 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:06] Ritual: 33.07 MB → 3.80 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:11] Ritual: 40.09 MB → 4.61 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:16] Ritual: 48.71 MB → 5.60 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:21] Ritual: 21.00 MB → 2.42 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:27] Ritual: 46.60 MB → 5.36 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:32] Ritual: 44.02 MB → 5.06 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:37] Ritual: 25.55 MB → 2.94 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:42] Ritual: 12.99 MB → 1.49 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:47] Ritual: 34.63 MB → 3.98 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:52] Ritual: 37.27 MB → 4.29 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:19:57] Ritual: 11.19 MB → 1.29 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:02] Ritual: 23.92 MB → 2.75 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:07] Ritual: 16.22 MB → 1.86 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:12] Ritual: 42.53 MB → 4.89 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:17] Ritual: 19.42 MB → 2.23 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:22] Ritual: 28.49 MB → 3.28 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:27] Ritual: 39.60 MB → 4.55 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:32] Ritual: 43.24 MB → 4.97 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:37] Ritual: 38.75 MB → 4.46 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:42] Ritual: 44.68 MB → 5.14 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:47] Ritual: 23.36 MB → 2.69 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:52] Ritual: 43.66 MB → 5.02 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:20:57] Ritual: 25.59 MB → 2.94 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:02] Ritual: 45.61 MB → 5.24 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:07] Ritual: 29.46 MB → 3.39 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:12] Ritual: 45.32 MB → 5.21 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:17] Ritual: 34.87 MB → 4.01 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:22] Ritual: 26.18 MB → 3.01 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:27] Ritual: 18.99 MB → 2.18 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:32] Ritual: 31.96 MB → 3.68 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:37] Ritual: 27.69 MB → 3.18 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:42] Ritual: 24.64 MB → 2.83 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:47] Ritual: 49.78 MB → 5.72 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:52] Ritual: 18.10 MB → 2.08 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:21:57] Ritual: 25.57 MB → 2.94 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:02] Ritual: 25.90 MB → 2.98 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:07] Ritual: 32.70 MB → 3.76 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:12] Ritual: 28.88 MB → 3.32 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:17] Ritual: 20.74 MB → 2.39 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:22] Ritual: 32.22 MB → 3.71 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:27] Ritual: 39.92 MB → 4.59 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:32] Ritual: 26.07 MB → 3.00 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:37] Ritual: 20.36 MB → 2.34 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:42] Ritual: 38.34 MB → 4.41 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:47] Ritual: 38.47 MB → 4.42 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:52] Ritual: 23.05 MB → 2.65 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:22:57] Ritual: 49.28 MB → 5.67 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:02] Ritual: 43.22 MB → 4.97 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:07] Ritual: 23.74 MB → 2.73 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:12] Ritual: 11.23 MB → 1.29 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:17] Ritual: 11.18 MB → 1.29 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:22] Ritual: 23.69 MB → 2.72 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:27] Ritual: 42.28 MB → 4.86 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:32] Ritual: 39.55 MB → 4.55 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:37] Ritual: 47.83 MB → 5.50 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:42] Ritual: 15.00 MB → 1.72 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:47] Ritual: 49.50 MB → 5.69 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:52] Ritual: 34.38 MB → 3.95 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:23:57] Ritual: 17.07 MB → 1.96 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:02] Ritual: 47.13 MB → 5.42 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:07] Ritual: 45.88 MB → 5.28 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:12] Ritual: 42.18 MB → 4.85 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:17] Ritual: 28.52 MB → 3.28 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:22] Ritual: 18.04 MB → 2.07 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:27] Ritual: 21.10 MB → 2.43 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:32] Ritual: 14.66 MB → 1.69 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:37] Ritual: 43.16 MB → 4.96 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:42] Ritual: 13.89 MB → 1.60 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:47] Ritual: 23.91 MB → 2.75 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:52] Ritual: 28.11 MB → 3.23 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:24:57] Ritual: 33.31 MB → 3.83 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:02] Ritual: 19.82 MB → 2.28 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:07] Ritual: 14.45 MB → 1.66 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:12] Ritual: 29.66 MB → 3.41 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:17] Ritual: 18.93 MB → 2.18 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:22] Ritual: 39.76 MB → 4.57 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:27] Ritual: 33.76 MB → 3.88 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:32] Ritual: 28.77 MB → 3.31 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:37] Ritual: 19.00 MB → 2.18 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:42] Ritual: 26.07 MB → 3.00 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:47] Ritual: 29.35 MB → 3.38 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:52] Ritual: 23.51 MB → 2.70 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:25:57] Ritual: 23.53 MB → 2.71 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:02] Ritual: 42.64 MB → 4.90 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:07] Ritual: 28.80 MB → 3.31 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:12] Ritual: 26.26 MB → 3.02 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:17] Ritual: 33.01 MB → 3.80 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:22] Ritual: 42.98 MB → 4.94 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:27] Ritual: 25.66 MB → 2.95 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:32] Ritual: 38.56 MB → 4.43 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:37] Ritual: 23.60 MB → 2.71 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:42] Ritual: 40.49 MB → 4.66 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:47] Ritual: 20.99 MB → 2.41 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:52] Ritual: 26.60 MB → 3.06 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:26:57] Ritual: 22.29 MB → 2.56 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:02] Ritual: 11.70 MB → 1.35 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:07] Ritual: 39.48 MB → 4.54 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:12] Ritual: 38.79 MB → 4.46 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:17] Ritual: 48.14 MB → 5.54 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:22] Ritual: 42.47 MB → 4.88 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:27] Ritual: 38.26 MB → 4.40 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:32] Ritual: 16.37 MB → 1.88 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:37] Ritual: 32.93 MB → 3.79 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:42] Ritual: 44.99 MB → 5.17 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:47] Ritual: 27.29 MB → 3.14 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:52] Ritual: 48.45 MB → 5.57 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:27:57] Ritual: 25.09 MB → 2.88 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:02] Ritual: 39.27 MB → 4.52 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:07] Ritual: 29.81 MB → 3.43 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:12] Ritual: 38.83 MB → 4.47 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:17] Ritual: 20.48 MB → 2.36 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:22] Ritual: 19.63 MB → 2.26 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:27] Ritual: 22.43 MB → 2.58 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:32] Ritual: 27.74 MB → 3.19 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:37] Ritual: 31.90 MB → 3.67 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:42] Ritual: 35.60 MB → 4.09 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:47] Ritual: 36.92 MB → 4.25 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:52] Ritual: 28.86 MB → 3.32 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:28:57] Ritual: 29.87 MB → 3.44 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:02] Ritual: 12.27 MB → 1.41 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:07] Ritual: 17.85 MB → 2.05 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:12] Ritual: 40.90 MB → 4.70 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:17] Ritual: 34.29 MB → 3.94 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:22] Ritual: 45.19 MB → 5.20 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:27] Ritual: 11.00 MB → 1.26 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:32] Ritual: 29.12 MB → 3.35 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:37] Ritual: 45.35 MB → 5.22 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:42] Ritual: 36.41 MB → 4.19 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:47] Ritual: 38.51 MB → 4.43 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:52] Ritual: 44.71 MB → 5.14 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:29:57] Ritual: 38.20 MB → 4.39 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:02] Ritual: 28.53 MB → 3.28 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:07] Ritual: 34.29 MB → 3.94 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:12] Ritual: 18.80 MB → 2.16 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:17] Ritual: 29.57 MB → 3.40 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:22] Ritual: 10.10 MB → 1.16 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:27] Ritual: 23.97 MB → 2.76 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:32] Ritual: 12.38 MB → 1.42 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:37] Ritual: 40.54 MB → 4.66 ECHO (w/ML+) | Purity: 91.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:42] Ritual: 32.26 MB → 3.71 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:47] Ritual: 28.51 MB → 3.28 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:52] Ritual: 30.75 MB → 3.54 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:30:57] Ritual: 41.63 MB → 4.79 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:02] Ritual: 40.47 MB → 4.65 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:07] Ritual: 14.01 MB → 1.61 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:12] Ritual: 12.85 MB → 1.48 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:17] Ritual: 36.98 MB → 4.25 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:22] Ritual: 14.06 MB → 1.62 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:27] Ritual: 27.72 MB → 3.19 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:32] Ritual: 29.76 MB → 3.42 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:37] Ritual: 40.76 MB → 4.69 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:42] Ritual: 19.90 MB → 2.29 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:47] Ritual: 28.21 MB → 3.24 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:52] Ritual: 40.20 MB → 4.62 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:31:57] Ritual: 36.70 MB → 4.22 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:02] Ritual: 45.47 MB → 5.23 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:07] Ritual: 20.59 MB → 2.37 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:12] Ritual: 38.89 MB → 4.47 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:17] Ritual: 16.97 MB → 1.95 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:22] Ritual: 11.53 MB → 1.33 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:27] Ritual: 44.94 MB → 5.17 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:32] Ritual: 10.02 MB → 1.15 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:37] Ritual: 38.75 MB → 4.46 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:42] Ritual: 18.25 MB → 2.10 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:47] Ritual: 49.70 MB → 5.72 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:52] Ritual: 49.47 MB → 5.69 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:32:57] Ritual: 42.28 MB → 4.86 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:02] Ritual: 34.63 MB → 3.98 ECHO (w/ML+) | Purity: 92.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:07] Ritual: 10.56 MB → 1.21 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:12] Ritual: 37.95 MB → 4.36 ECHO (w/ML+) | Purity: 93.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:17] Ritual: 12.13 MB → 1.39 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:22] Ritual: 33.39 MB → 3.84 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:27] Ritual: 10.76 MB → 1.24 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:32] Ritual: 23.99 MB → 2.76 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:37] Ritual: 33.16 MB → 3.81 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:42] Ritual: 43.24 MB → 4.97 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:47] Ritual: 17.93 MB → 2.06 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:52] Ritual: 11.26 MB → 1.29 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:33:57] Ritual: 28.83 MB → 3.32 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:02] Ritual: 16.33 MB → 1.88 ECHO (w/ML+) | Purity: 91.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:07] Ritual: 37.93 MB → 4.36 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:12] Ritual: 36.91 MB → 4.24 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:17] Ritual: 45.86 MB → 5.27 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:22] Ritual: 23.12 MB → 2.66 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:27] Ritual: 34.42 MB → 3.96 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:32] Ritual: 19.54 MB → 2.25 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:37] Ritual: 29.17 MB → 3.35 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:42] Ritual: 31.24 MB → 3.59 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:47] Ritual: 16.53 MB → 1.90 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:52] Ritual: 17.99 MB → 2.07 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:34:57] Ritual: 25.86 MB → 2.97 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:02] Ritual: 27.35 MB → 3.15 ECHO (w/ML+) | Purity: 91.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:07] Ritual: 31.50 MB → 3.62 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:12] Ritual: 12.14 MB → 1.40 ECHO (w/ML+) | Purity: 92.7%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:17] Ritual: 11.57 MB → 1.33 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:22] Ritual: 35.39 MB → 4.07 ECHO (w/ML+) | Purity: 92.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:27] Ritual: 12.55 MB → 1.44 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:32] Ritual: 32.13 MB → 3.69 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:37] Ritual: 20.31 MB → 2.34 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:42] Ritual: 37.39 MB → 4.30 ECHO (w/ML+) | Purity: 91.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:47] Ritual: 36.63 MB → 4.21 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:52] Ritual: 18.32 MB → 2.11 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:35:57] Ritual: 35.37 MB → 4.07 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:02] Ritual: 49.60 MB → 5.70 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:07] Ritual: 36.03 MB → 4.14 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:12] Ritual: 34.89 MB → 4.01 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:17] Ritual: 29.73 MB → 3.42 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:22] Ritual: 37.68 MB → 4.33 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:27] Ritual: 35.92 MB → 4.13 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:32] Ritual: 19.12 MB → 2.20 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:37] Ritual: 23.44 MB → 2.70 ECHO (w/ML+) | Purity: 92.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:42] Ritual: 19.66 MB → 2.26 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:47] Ritual: 36.59 MB → 4.21 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:52] Ritual: 18.21 MB → 2.09 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:36:57] Ritual: 17.97 MB → 2.07 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:02] Ritual: 29.16 MB → 3.35 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:07] Ritual: 18.76 MB → 2.16 ECHO (w/ML+) | Purity: 91.2%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:12] Ritual: 38.48 MB → 4.42 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:17] Ritual: 12.39 MB → 1.43 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:22] Ritual: 35.59 MB → 4.09 ECHO (w/ML+) | Purity: 92.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:27] Ritual: 31.12 MB → 3.58 ECHO (w/ML+) | Purity: 92.5%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:32] Ritual: 21.12 MB → 2.43 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:37] Ritual: 17.79 MB → 2.05 ECHO (w/ML+) | Purity: 91.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:42] Ritual: 28.41 MB → 3.27 ECHO (w/ML+) | Purity: 91.3%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:47] Ritual: 49.64 MB → 5.71 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:52] Ritual: 31.17 MB → 3.58 ECHO (w/ML+) | Purity: 91.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:37:57] Ritual: 34.44 MB → 3.96 ECHO (w/ML+) | Purity: 92.1%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:38:02] Ritual: 34.16 MB → 3.93 ECHO (w/ML+) | Purity: 92.6%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:38:07] Ritual: 49.03 MB → 5.64 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:38:12] Ritual: 19.78 MB → 2.27 ECHO (w/ML+) | Purity: 91.8%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:38:17] Ritual: 25.26 MB → 2.91 ECHO (w/ML+) | Purity: 91.9%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:38:22] Ritual: 38.10 MB → 4.38 ECHO (w/ML+) | Purity: 92.4%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.
+[12:38:27] Ritual: 39.93 MB → 4.59 ECHO (w/ML+) | Purity: 92.0%
+  ✅ Domain Eligible: Node purity exceeds 60%
+  📜 Ledger updated.

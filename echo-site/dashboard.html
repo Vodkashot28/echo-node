@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>EchoMesh Dashboard: Blueprint Interface</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* Import Space Mono for the Blueprint aesthetic */
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+    :root {
+      /* Blueprint Colors */
+      --primary: #00ffff; /* Cyan */
+      --secondary: #ff00cc; /* Magenta */
+      --bg: #0d0a1b; /* Dark Blue/Purple Background */
+      --card-bg: #1a1a2e; /* Slightly lighter Card Background */
+      --text: #f0f0f0; /* White/Light Text */
+      --accent: #28a745; /* Green Accent (for success/online status) */
+      /* Blueprint specific additions */
+      --border-glow: 1px solid rgba(0, 255, 255, 0.2);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      margin: 0;
+      padding: 2em;
+      padding-bottom: 50px; /* Space for the fixed footer */
+    }
+
+    h1, h2 {
+      color: var(--primary);
+      text-align: center;
+      margin-bottom: 1em;
+    }
+
+    h1, h2, h3 {
+      letter-spacing: 0.1em;
+      /* Stamped, technical look */
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1.5em;
+      margin-bottom: 2em;
+    }
+
+    .card {
+      background: rgba(26, 26, 46, 0.7);
+      padding: 1.5em;
+      border-radius: 44px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+      border: var(--border-glow);
+      transition: all 0.2s ease-in-out;
+    }
+
+    .card:hover {
+        transform: scale(1.005);
+        box-shadow: 0 0 15px rgba(0, 255, 255, 0.2); /* Cyan glow on hover */
+    }
+
+    .card h3 {
+      margin-top: 0;
+      color: var(--secondary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .value {
+      font-size: 1.4em;
+      font-weight: bold;
+      color: var(--primary);
+    }
+
+    pre {
+      background: transparent;
+      border: var(--border-glow);
+      padding: 0.8em;
+      border-radius: 4px;
+      overflow-x: auto;
+      color: var(--text);
+    }
+
+    /* --- CHART FIXES FOR MOBILE FRIENDLINESS --- */
+
+    /* NEW: Dedicated wrapper for responsiveness. Sets default desktop height. */
+    .chart-wrapper {
+        max-width: 100%;
+        height: 400px; /* Standard chart height */
+        overflow-x: hidden; 
+        margin: 0 auto; 
+        padding: 0 1em; /* Add padding to prevent chart touching screen edges */
+    }
+
+    canvas {
+      /* Forces the canvas to use the full width/height of the responsive wrapper */
+      width: 100% !important; 
+      height: 100% !important;
+      
+      background: #1e1e2f !important;
+      border-radius: 4px;
+      padding: 1em;
+      border: 1px solid var(--primary);
+      box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
+      display: block;
+      max-width: 100%;
+    }
+
+    /* NEW: Media Query for smaller screens (mobile optimization) */
+    @media (max-width: 576px) {
+        body {
+            padding: 1em; /* Less padding on very small screens */
+        }
+        .grid {
+            grid-template-columns: 1fr; /* Single column layout for cards on mobile */
+        }
+        .chart-wrapper {
+            height: 300px; /* Shorter chart height on mobile */
+            padding: 0;
+        }
+        .footer-prompt {
+            padding: 0.5em 1em;
+            font-size: 0.8em;
+        }
+    }
+
+    /* --- END CHART FIXES --- */
+
+    a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    ul#live-feed {
+        padding-left: 1.5em;
+        list-style-type: none;
+    }
+    ul#live-feed li {
+        margin-bottom: 0.5em;
+    }
+
+    /* Input/Button Styling */
+    .card input[type="text"] {
+        width: 95%;
+        padding: 0.5em;
+        margin-bottom: 0.8em;
+        background: var(--bg);
+        border: var(--border-glow);
+        color: var(--text);
+        box-sizing: border-box;
+    }
+
+    .card button[type="submit"] {
+        width: 100%;
+        padding: 0.7em;
+        background: var(--primary);
+        color: var(--bg);
+        border: none;
+        font-weight: bold;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .card button[type="submit"]:hover {
+        background-color: var(--secondary);
+    }
+
+    /* Command Prompt Footer Style */
+    .footer-prompt {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      background: rgba(13, 10, 27, 0.95);
+      border-top: 1px solid var(--primary);
+      padding: 0.5em 2em;
+      box-shadow: 0 -4px 15px rgba(0, 255, 255, 0.1);
+      z-index: 1000;
+    }
+
+    .footer-prompt span {
+        color: var(--secondary);
+    }
+
+    .footer-prompt a {
+        margin-left: 1em;
+        font-size: 0.9em;
+    }
+    .footer-prompt #system-status {
+        color: var(--accent);
+    }
+
+    /* Style for the ML Contribution Toggle Switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 60px;
+      height: 28px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: var(--card-bg);
+      transition: .4s;
+      border: 1px solid var(--secondary);
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 4px;
+      bottom: 3px;
+      background-color: var(--secondary);
+      transition: .4s;
+    }
+
+    input:checked + .slider {
+      background-color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+
+    input:checked + .slider:before {
+      background-color: var(--bg);
+      transform: translateX(29px);
+    }
+
+    .slider.round {
+      border-radius: 4px;
+    }
+
+    .slider.round:before {
+      border-radius: 2px;
+    }
+
+    /* Status classes to replace inline styles */
+    .status-offline { color: red; border-color: red; }
+    .status-active { color: var(--primary); border-color: var(--primary); }
+    .status-inactive { color: var(--secondary); border-color: var(--secondary); }
+    .status-staked { color: var(--accent); border-color: var(--accent); }
+
+  </style>
+</head>
+<body>
+  <h1>🧬 EchoMesh Dashboard</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h3>📊 Resurrection Ledger Summary</h3>
+      <pre id="ledgerPreview">Loading...</pre>
+    </div>
+    <div class="card">
+      <h3>🪙 ECHO Balance
+        <span id="balance-status" class="status-active" style="font-size: 0.6em; padding: 0.2em 0.5em; border-radius: 2px;">Loading...</span>
+      </h3>
+      <p id="wallet-balance" class="value">Loading...</p>
+    </div>
+    <div class="card">
+      <h3>📡 Bandwidth Status</h3>
+      <p id="total-bandwidth" class="value">Loading...</p>
+    </div>
+    <div class="card">
+      <h3>🧾 Latest Ledger Entry</h3>
+      <pre id="latest-entry">Loading...</pre>
+    </div>
+    <div class="card">
+      <h3>🔄 Live Echo Feed</h3>
+      <ul id="live-feed"></ul>
+    </div>
+  </div>
+
+  <h2>📈 Bandwidth & Yield Over Time</h2>
+  <div id="yieldChartWrapper" class="chart-wrapper">
+      <canvas id="yieldChart"></canvas>
+  </div>
+
+  <h2>🧾 Publishing Panel</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>🧬 Artifact Manager</h3>
+      <form id="artifactUploadForm">
+        <label for="artifactName" style="color: var(--secondary); font-size: 0.9em;">Artifact Name:</label>
+        <input type="text" id="artifactName" name="artifactName" placeholder="e.g., Q3-2025-report.pdf" required>
+
+        <label for="artifactCid" style="color: var(--secondary); font-size: 0.9em;">IPFS CID:</label>
+        <input type="text" id="artifactCid" name="artifactCid" placeholder="e.g., bafybeigdyrztxqzv6..." required>
+
+        <button type="submit">
+          UPLOAD & PIN
+        </button>
+      </form>
+      <p id="artifactStatus" style="margin-top: 1em; color: var(--secondary); font-size: 0.8em;"></p>
+      </div>
+    <div class="card">
+      <h3>🔐 Authorship Purification</h3>
+      <p>Stake ECHO to verify identity</p>
+    </div>
+    <div class="card">
+      <h3>📦 Storage Swaps</h3>
+      <p>Convert ECHO into IPFS, DNSLink, or .car</p>
+    </div>
+    <div class="card">
+      <h3>📅 Publishing Scheduler</h3>
+      <p>Reserve slots based on credits or governance</p>
+    </div>
+  </div>
+
+  <h2>📡 Bandwidth Oracle</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>🌐 Bandwidth Monitor</h3>
+      <div style="margin-bottom: 0.8em;">
+        <p style="margin: 0; font-size: 0.9em; color: var(--text);">Data Shared (24h):</p>
+        <p id="shared-24h" class="value" style="font-size: 1.2em; margin-top: 0.2em;">Loading...</p>
+      </div>
+      <div>
+        <p style="margin: 0; font-size: 0.9em; color: var(--text);">Active Routes:</p>
+        <p id="active-routes" class="value" style="font-size: 1.2em; color: var(--secondary); margin-top: 0.2em;">Loading...</p>
+      </div>
+    </div>
+    <div class="card">
+      <h3>🧾 Yield Log</h3>
+      <div style="margin-bottom: 0.8em;">
+        <p style="margin: 0; font-size: 0.9em; color: var(--text);">Estimated Daily Yield:</p>
+        <p id="estimated-yield" class="value" style="font-size: 1.2em; margin-top: 0.2em;">Loading...</p>
+      </div>
+      <div>
+        <p style="margin: 0; font-size: 0.9em; color: var(--text);">Last Payout (ECHO):</p>
+        <p id="last-payout" class="value" style="font-size: 1.2em; color: var(--accent); margin-top: 0.2em;">Loading...</p>
+      </div>
+    </div>
+    <div class="card">
+      <h3>🔄 Routing Preferences</h3>
+      <p style="font-size: 0.9em; color: var(--text);">Current Policy:</p>
+      <p id="routing-policy" class="value" style="font-size: 1.2em; margin-top: 0.2em;">CDN-Priority (Low Latency)</p>
+      <a href="#" style="font-size: 0.8em; display: block; margin-top: 1em;">[RECONFIGURE: Node/CDN/Proxy]</a>
+    </div>
+    <div class="card">
+      <h3>🧠 ML Contribution Toggle</h3>
+      <p style="font-size: 0.9em; color: var(--text); margin-bottom: 0.5em;">Status:</p>
+
+      <div id="ml-toggle-container" style="display: flex; align-items: center; justify-content: space-between;">
+          <span id="ml-status-text" class="value status-inactive" style="font-size: 1.2em;">INACTIVE</span>
+
+          <label class="switch">
+              <input type="checkbox" id="ml-contribution-toggle">
+              <span class="slider round"></span>
+          </label>
+      </div>
+      <p id="ml-feedback" style="font-size: 0.75em; margin-top: 1em; color: var(--primary);">Compute not being utilized.</p>
+    </div>
+  </div>
+
+  <h2>🗳️ Governance Panel</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>🗳️ Proposal Board</h3>
+      <p><a href="#">View & Vote on Protocol Upgrades</a></p>
+    </div>
+    <div class="card">
+      <h3>📊 Voting Weight</h3>
+      <p>Based on bandwidth, authorship, and legacy</p>
+    </div>
+    <div class="card">
+      <h3>🧾 Governance History</h3>
+      <p>Ledger of past votes and outcomes</p>
+    </div>
+    <div class="card">
+      <h3>🧠 Model Curation</h3>
+      <p>Influence AI training priorities</p>
+    </div>
+  </div>
+
+  <h2>📜 Resurrection Ledger Viewer</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>🔍 Artifact Search</h3>
+      <p><a href="#">Search by author, hash, or timestamp</a></p>
+    </div>
+    <div class="card">
+      <h3>🧬 Lineage Explorer</h3>
+      <p>Visualize artifact ancestry</p>
+    </div>
+    <div class="card">
+      <h3>📦 Ledger Export</h3>
+      <p><a href="#">Download reproducible logs</a></p>
+    </div>
+    <div class="card">
+      <h3>🧾 Legacy Score</h3>
+      <p>Reputation derived from publishing history</p>
+    </div>
+  </div>
+
+  <div class="footer-prompt">
+    <span>vodkashot28 $</span> status: <span id="system-status">SYSTEM ONLINE [Asia/Tokyo]</span>
+    <a href="https://github.com/Vodkashot28" target="_blank">GITHUB_SYNC</a> |
+    <a href="https://x.com/jn_alair" target="_blank">X_FEED</a> |
+    <a href="https://gravatar.com/jnalair28" target="_blank">AUTH_PROFILE</a>
+  </div>
+
+  <script>
+    // Utility function for cache-busting
+    const cacheBuster = (url) => `${url}?ts=${Date.now()}`;
+
+    // Function to handle class-based status updates
+    function updateStatusClass(element, status) {
+        element.classList.remove('status-offline', 'status-active', 'status-inactive', 'status-staked');
+        element.classList.add(status);
+    }
+
+    // --- Data Fetching and Initialization Logic ---
+
+    // Fetch and process ledger data from the JSON Lines log file
+    fetch(cacheBuster("./resurrection_ledger.log"))
+      .then(res => {
+        if (!res.ok) {
+            throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        return res.text(); // Read as text for JSON Lines format
+      })
+      .then(text => {
+        // Parse the text, line-by-line, filtering out malformed entries
+        const data = text.trim()
+            .split('\n')
+            .map(line => {
+                try {
+                    return JSON.parse(line);
+                } catch (e) {
+                    return null;
+                }
+            })
+            .filter(item => item !== null);
+
+        if (data.length === 0) {
+            throw new Error("Ledger data is empty or invalid array.");
+        }
+
+        // --- Ledger Data Processing: Using Substring for consistent HH:MM:SS format ---
+
+        // Helper to consistently format the timestamp
+        const formatTime = (timestamp) => timestamp ? timestamp.substring(11, 19) : 'N/A';
+
+        // 1. Ledger Summary (Last 3 entries)
+        const preview = data.slice(-3).map(e => {
+            const bandwidth = parseFloat(e.bandwidth_shared_mb || 0);
+            const yieldEcho = parseFloat(e.echo_earned || 0);
+            return `[${formatTime(e.timestamp)}] ${bandwidth.toFixed(2)}MB → ${yieldEcho.toFixed(4)} ECHO`;
+        }).join("\n");
+        document.getElementById("ledgerPreview").textContent = preview;
+
+        // 2. Latest Entry
+        const last = data[data.length - 1] || {};
+        const lastBandwidth = parseFloat(last.bandwidth_shared_mb || 0);
+        const lastYieldEcho = parseFloat(last.echo_earned || 0);
+        const latest = `[${formatTime(last.timestamp)}] ${lastBandwidth.toFixed(2)}MB → ${lastYieldEcho.toFixed(4)} ECHO`;
+        document.getElementById("latest-entry").textContent = latest;
+
+        // 3. Live Echo Feed (Last 5 entries, reversed for newest first)
+        const feed = document.getElementById("live-feed");
+        feed.innerHTML = '';
+        data.slice(-5).reverse().forEach(e => {
+          const li = document.createElement("li");
+          // Use artifact_cid as a fallback for the title
+          const title = e.artifact_cid || "Artifact";
+          const currentYield = parseFloat(e.echo_earned || 0);
+          li.textContent = `${formatTime(e.timestamp)} | ${title} | ${currentYield.toFixed(4)} ECHO`;
+          feed.appendChild(li);
+        });
+
+        // 4. Bandwidth Total
+        const totalBandwidth = data.reduce((sum, e) => sum + parseFloat(e.bandwidth_shared_mb || 0), 0);
+        document.getElementById("total-bandwidth").textContent = totalBandwidth.toFixed(2) + " MB";
+
+        // 5. Chart.js Implementation (Line Chart with Dual Y-Axis)
+        const chartElement = document.getElementById("yieldChart");
+        const RECENT_COUNT = 10;
+        const recentData = data.slice(-RECENT_COUNT);
+
+        const labels = recentData.map(e => formatTime(e.timestamp));
+        const bandwidth = recentData.map(e => parseFloat(e.bandwidth_shared_mb || 0));
+        const yieldEcho = recentData.map(e => parseFloat(e.echo_earned || 0));
+
+        try {
+            // Chart options are defined here, using variables for colors
+            const chartOptions = {
+                animation: true,
+                // ESSENTIAL: Set to true and maintainAspectRatio: false for responsiveness
+                responsive: true,
+                maintainAspectRatio: false, 
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                stacked: false,
+                scales: {
+                  y: {
+                    beginAtZero: true, // Bandwidth Scale
+                    type: 'linear', 
+                    display: true,
+                    position: 'left',
+                    title: {
+                        display: true,
+                        text: 'Bandwidth (MB)',
+                        color: 'var(--primary)'
+                    },
+                    grid: { color: 'rgba(0, 255, 255, 0.1)', drawBorder: true, borderColor: 'var(--primary)' },
+                    ticks: { color: 'var(--text)' }
+                  },
+                  y1: { // Secondary Y-Axis for Yield (ECHO)
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: {
+                        display: true,
+                        text: 'Yield (ECHO)',
+                        color: 'var(--secondary)'
+                    },
+                    grid: { drawOnChartArea: false },
+                    ticks: { color: 'var(--text)' }
+                  },
+                  x: {
+                    title: {
+                        display: true,
+                        text: 'Timestamp (Last 10 Cycles)',
+                        color: 'var(--primary)'
+                    },
+                    grid: { color: 'rgba(0, 255, 255, 0.1)', drawBorder: true, borderColor: 'var(--primary)' },
+                    ticks: { 
+                        color: 'var(--text)', 
+                        // MOBILE FRIENDLY: Limit ticks and rotation to prevent overlap
+                        maxTicksLimit: 7, 
+                        maxRotation: 0, 
+                        minRotation: 0 
+                    }
+                  }
+                },
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: 'var(--text)',
+                            font: { family: 'Space Mono' }
+                        }
+                    },
+                    title: {
+                        display: false
+                    }
+                }
+            };
+
+            new Chart(chartElement, {
+              type: "line", // Changed to line chart
+              data: {
+                labels: labels,
+                datasets: [
+                  {
+                    label: "Bandwidth (MB)",
+                    data: bandwidth,
+                    borderColor: "#00ffff", // var(--primary)
+                    backgroundColor: "rgba(0, 255, 255, 0.1)", // Light fill
+                    fill: true, 
+                    tension: 0.4, 
+                    pointRadius: 3,
+                    pointBackgroundColor: "#00ffff",
+                    yAxisID: 'y' // Use the left axis
+                  },
+                  {
+                    label: "Yield (ECHO)",
+                    data: yieldEcho,
+                    borderColor: "#ff00cc", // var(--secondary)
+                    backgroundColor: "rgba(255, 0, 204, 0.1)", // Light fill
+                    fill: true, 
+                    tension: 0.4, 
+                    pointRadius: 3,
+                    pointBackgroundColor: "#ff00cc",
+                    yAxisID: 'y1' // Use the right axis
+                  }
+                ]
+              },
+              options: chartOptions
+            });
+        } catch (chartError) {
+            console.error("Chart.js Initialization Failed:", chartError);
+            const ctx = chartElement.getContext('2d');
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            ctx.font = "20px 'Space Mono', monospace";
+            ctx.fillStyle = "var(--secondary)";
+            ctx.textAlign = "center";
+            ctx.fillText("ERROR: CHART RENDER FAILED", ctx.canvas.width / 2, ctx.canvas.height / 2);
+        }
+      })
+      .catch(error => {
+        // --- Error Handling for Ledger Data ---
+        console.error("Error loading ledger data:", error);
+        document.getElementById("ledgerPreview").textContent = "Error: Ledger File Corrupt or Missing.";
+        document.getElementById("latest-entry").textContent = "Error: Ledger File Corrupt or Missing.";
+        document.getElementById("total-bandwidth").textContent = "0.00 MB";
+
+        // Render error message on chart canvas
+        const ctx = document.getElementById("yieldChart")?.getContext('2d');
+        if (ctx) {
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            ctx.font = "20px 'Space Mono', monospace";
+            ctx.fillStyle = "var(--secondary)";
+            ctx.textAlign = "center";
+            ctx.fillText("ERROR: YIELD DATA OFFLINE", ctx.canvas.width / 2, ctx.canvas.height / 2);
+        }
+      });
+
+    // Wallet Balance Fetch (with Status Tweak)
+    fetch(cacheBuster("./echo-wallet.balance"))
+      .then(res => res.text())
+      .then(balance => {
+        const parsedBalance = parseFloat(balance);
+        const statusElement = document.getElementById("balance-status");
+
+        // TWEAK: Status Indicator Logic uses classes now
+        if (isNaN(parsedBalance) || parsedBalance <= 0) {
+            statusElement.textContent = "INACTIVE";
+            updateStatusClass(statusElement, 'status-inactive');
+        } else if (parsedBalance < 1000) {
+            statusElement.textContent = "ACTIVE";
+            updateStatusClass(statusElement, 'status-active');
+        } else {
+            statusElement.textContent = "STAKED (HODL)";
+            updateStatusClass(statusElement, 'status-staked');
+        }
+
+        document.getElementById("wallet-balance").textContent = isNaN(parsedBalance) ?
+          "0.0000 ECHO (CORRUPT)" :
+          parsedBalance.toFixed(4) + " ECHO";
+      })
+      .catch(error => {
+        console.error("Error loading wallet balance:", error);
+        document.getElementById("wallet-balance").textContent = "0.0000 ECHO (OFFLINE)";
+        const statusElement = document.getElementById("balance-status");
+        statusElement.textContent = "OFFLINE";
+        updateStatusClass(statusElement, 'status-offline');
+      });
+
+    // --- Artifact Manager Logic (with Real-time Update Tweak) ---
+
+    const form = document.getElementById('artifactUploadForm');
+    const statusElement = document.getElementById('artifactStatus');
+
+    form.addEventListener('submit', function(event) {
+        event.preventDefault();
+
+        const artifactName = document.getElementById('artifactName').value.trim();
+        const artifactCid = document.getElementById('artifactCid').value.trim();
+        const timestamp = new Date().toISOString();
+
+        // Helper to consistently format the timestamp (redefined here for scope)
+        const formatTime = (ts) => ts ? ts.substring(11, 19) : 'N/A';
+
+        statusElement.style.color = 'var(--primary)';
+        statusElement.textContent = "Processing upload request...";
+
+        setTimeout(() => {
+            const transactionHash = `0x${Math.random().toString(16).slice(2, 10)}`;
+
+            statusElement.style.color = 'var(--accent)';
+            statusElement.innerHTML = `SUCCESS: <span style="font-weight: bold;">${artifactName}</span> pinned.<br>Tx: ${transactionHash}...`;
+
+            form.reset();
+
+            // TWEAK: Simulate Real-time Dashboard Update
+            const simulatedBandwidth = (Math.random() * 5) + 1;
+            const simulatedYield = (Math.random() * 0.05) + 0.001;
+
+            const newEntryText = `[${formatTime(timestamp)}] ${simulatedBandwidth.toFixed(2)}MB → ${simulatedYield.toFixed(4)} ECHO`;
+
+            // Update Latest Ledger Entry
+            document.getElementById("latest-entry").textContent = newEntryText;
+
+            // Update Live Echo Feed
+            const feed = document.getElementById("live-feed");
+            const li = document.createElement("li");
+            li.textContent = `${formatTime(timestamp)} | ${artifactName} | ${simulatedYield.toFixed(4)} ECHO (Pinned)`;
+
+            if (feed.firstChild) {
+                feed.insertBefore(li, feed.firstChild);
+            } else {
+                feed.appendChild(li);
+            }
+
+            // Limit feed to 5 items
+            while (feed.children.length > 5) {
+                feed.removeChild(feed.lastChild);
+            }
+
+            // Playful Bonus: Briefly highlight the updated elements
+            const latestCard = document.getElementById("latest-entry").parentElement;
+            latestCard.style.boxShadow = '0 0 15px rgba(255, 0, 204, 0.7)';
+            setTimeout(() => {
+                latestCard.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.4)';
+            }, 500);
+
+        }, 1500);
+    });
+
+    // --- Bandwidth Oracle Logic ---
+
+    function loadOracleData() {
+        // Bandwidth Monitor
+        const shared24h = (Math.random() * 1024 * 5).toFixed(2);
+        document.getElementById("shared-24h").textContent = `${shared24h} MB`;
+        document.getElementById("active-routes").textContent = Math.floor(Math.random() * 8) + 4;
+
+        // Yield Log
+        const estYield = (shared24h / 500 * (Math.random() * 0.5 + 0.8)).toFixed(4);
+        document.getElementById("estimated-yield").textContent = `${estYield} ECHO`;
+        document.getElementById("last-payout").textContent = (estYield * (Math.random() * 1.5 + 0.5)).toFixed(4);
+    }
+
+    loadOracleData();
+
+    // --- ML Contribution Toggle Logic (using classes now) ---
+
+    const mlToggle = document.getElementById('ml-contribution-toggle');
+    const mlStatusText = document.getElementById('ml-status-text');
+    const mlFeedback = document.getElementById('ml-feedback');
+
+    mlToggle.addEventListener('change', function() {
+        if (this.checked) {
+            // ML Contribution ACTIVATED
+            mlStatusText.textContent = "ACTIVE";
+            mlStatusText.classList.remove('status-inactive');
+            mlStatusText.classList.add('status-staked'); // Reusing 'staked' style for active
+            mlFeedback.style.color = 'var(--accent)';
+            mlFeedback.textContent = "ATTENTION: Compute resources dedicated to model training. Potential for **+15% Yield**.";
+
+            // Playful: briefly highlight the toggle card
+            const card = mlToggle.closest('.card');
+            card.style.boxShadow = '0 0 20px rgba(40, 167, 69, 0.5)';
+            setTimeout(() => {
+                card.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.4)';
+            }, 500);
+
+        } else {
+            // ML Contribution DEACTIVATED
+            mlStatusText.textContent = "INACTIVE";
+            mlStatusText.classList.remove('status-staked');
+            mlStatusText.classList.add('status-inactive');
+            mlFeedback.style.color = 'var(--primary)';
+            mlFeedback.textContent = "Compute not being utilized. Minimum resource allocation engaged.";
+        }
+    });
+  </script>
+</body>
+</html>

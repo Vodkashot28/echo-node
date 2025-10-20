@@ -1,0 +1,6 @@
+daemon/target/
+nohup.out
+echo-site/*.balance
+echo-site/*.history
+echo-site/event.txt
+echo-site/resurrection_ledger.log

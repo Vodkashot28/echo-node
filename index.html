@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>EchoMesh Portal</title>
+  <style>
+    body {
+      background: linear-gradient(to right, #0f0c29, #302b63, #24243e);
+      color: #f0f0f0;
+      font-family: 'Courier New', monospace;
+      text-align: center;
+      padding: 3em;
+    }
+    h1 {
+      font-size: 2.5em;
+      color: #00ffff;
+      text-shadow: 0 0 5px #00ffff;
+    }
+    a {
+      display: inline-block;
+      margin-top: 1em;
+      padding: 0.8em 1.5em;
+      background: #ff00cc;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: bold;
+      box-shadow: 0 0 10px #ff00cc;
+    }
+    a:hover {
+      background: #cc00aa;
+    }
+    .section {
+      margin-top: 2em;
+    }
+    pre {
+      background: #1a1a1a;
+      padding: 1em;
+      border-radius: 5px;
+      overflow-x: auto;
+      color: #00ffcc;
+      font-size: 0.9em;
+      text-align: left;
+    }
+    code {
+      background: #1a1a1a;
+      padding: 0.2em 0.4em;
+      border-radius: 4px;
+      color: #00ffff;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔮 Welcome to EchoMesh</h1>
+  <p>Publishing is sacred. Bandwidth is legacy. Authorship is immortal.</p>
+  <a href="echo-site/dashboard.html">📊 Enter the Yield Dashboard</a>
+
+  <div class="section">
+    <h2>📜 Latest Ledger Entries</h2>
+    <pre id="ledgerPreview">Loading...</pre>
+  </div>
+
+  <div class="section">
+    <h2>📦 Archive</h2>
+    <p><a href="https://bafybeia2ejfdrzwmc74y4zhaginpc2dro7kzf76xuwjwftmck3rev5og2y.ipfs.w3s.link" target="_blank">Download .car Archive</a></p>
+  </div>
+
+  <div class="section">
+    <h2>🔗 Current CID</h2>
+    <p><code>QmRC4FBc4vJyja5Dm5WaY7k6FThzasrUx3xXDwBiy8Uc3P</code></p>
+  </div>
+
+  <script>
+    // Fetch the ledger and display the last three entries.
+    fetch("echo-site/ledger.json")
+      .then(res => res.json())
+      .then(data => {
+        // Ensure data exists and is an array.
+        if (data && Array.isArray(data)) {
+          const preview = data.slice(-3).map(entry =>
+            // The parser script `parse_ledger.py` uses 'bandwidth_mb' and 'yield_echo'.
+            `[${entry.timestamp}] ${entry.bandwidth_mb}MB → ${entry.yield_echo} ECHO`
+          ).join("\n");
+          document.getElementById("ledgerPreview").textContent = preview;
+        } else {
+           document.getElementById("ledgerPreview").textContent = "Ledger is empty or corrupt.";
+        }
+      })
+      .catch(error => {
+        console.error("Failed to load ledger:", error);
+        document.getElementById("ledgerPreview").textContent = "Error: Could not retrieve ledger data.";
+      });
+  </script>
+</body>
+</html>

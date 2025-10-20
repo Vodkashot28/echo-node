@@ -1,0 +1,61 @@
+[package]
+name = "daemon"
+version = "0.1.0"
+edition = "2021"
+
+# --- Dependencies: Essential Crates ---
+[dependencies]
+# Required for timestamp generation
+chrono = { version = "0.4", features = ["serde"] }
+# Required for random number generation
+rand = "0.8"
+# Required for serialization (LedgerEntry)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# CRITICAL: Required for reading the TOML configuration file
+toml = "0.8"
+
+# --- Custom Application Configuration (Nested under metadata) ---
+[package.metadata.echomesh]
+
+[package.metadata.echomesh.solana]
+# SET FOR TESTING: Targets the Solana Devnet for safe protocol testing.
+rpc_url = "https://api.devnet.solana.com"
+websocket_url = "wss://api.devnet.solana.com"
+program_id = "Echo1111111111111111111111111111111111111"
+keypair_path = "/data/keypairs/jnalair_devnet.json"
+
+[package.metadata.echomesh.node_identity]
+node_name = "jnx-echomesh" # <--- Updated
+region = "Asia/Tokyo"
+owner_x = "x.com/jn_alair"
+contact_email = "jnalair28@gravatar.com"
+
+[package.metadata.echomesh.data_protocol]
+ipfs_gateway = "https://ipfs.echomesh.io"
+local_storage_path = "/data/echomesh_artifacts"
+max_storage_gb = 512
+# Max MB/s simulated bandwidth cap for your node
+max_bandwidth_mbps = 50
+
+[package.metadata.echomesh.ritual_cycle]
+# Interval in seconds between yield cycles
+instruction_interval_seconds = 5
+max_batch_size = 100
+min_balance_for_certify_echo = 100.0
+
+[package.metadata.echomesh.purity_stake]
+auto_stake_enabled = true
+surplus_stake_threshold_echo = 250.0
+min_stake_amount = 5.0
+
+[package.metadata.echomesh.host_optimization]
+max_cpu_cores = 8
+max_ram_gb = 32
+priority_fee_microlamports = 50000
+enable_gpu_offload = true
+
+[package.metadata.echomesh.echoname_service]
+program_id = "ENS1111111111111111111111111111111111111"
+# Requires 60% purity to register a decentralized domain name
+min_purity_score_for_registration = 0.60
