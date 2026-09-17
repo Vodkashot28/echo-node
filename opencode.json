@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["README.md"],
+  "agent": {
+    "build": {
+      "description": "Builds, tests, and lints the Echo Node Rust project."
+    },
+    "review": {
+      "description": "Reviews Rust code for quality, safety, and consistency.",
+      "mode": "subagent",
+      "permission": { "edit": "deny" }
+    }
+  }
+}

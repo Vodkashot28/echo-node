@@ -2,14 +2,14 @@ use crate::models::*;
 use crate::MetricsBackend;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::PgPool;
 use std::str::FromStr;
 use std::time::Duration;
 
 #[derive(Clone)]
-pub struct SqliteStore {
-    pool: SqlitePool,
+pub struct NeonStore {
+    pool: PgPool,
 }
 
 const SCHEMA: &[&str] = &[
@@ -23,89 +23,89 @@ const SCHEMA: &[&str] = &[
         region TEXT,
         status TEXT NOT NULL DEFAULT 'offline',
         last_seen_at TEXT,
-        uptime REAL NOT NULL DEFAULT 0,
-        latency REAL NOT NULL DEFAULT 0,
-        bandwidth_used REAL NOT NULL DEFAULT 0,
-        quality_score REAL NOT NULL DEFAULT 0,
-        trust_score REAL DEFAULT 0,
-        earnings REAL NOT NULL DEFAULT 0,
-        packet_loss REAL NOT NULL DEFAULT 0,
-        last_updated TEXT,
+        uptime DOUBLE PRECISION NOT NULL DEFAULT 0,
+        latency DOUBLE PRECISION NOT NULL DEFAULT 0,
+        bandwidth_used DOUBLE PRECISION NOT NULL DEFAULT 0,
+        quality_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+        earnings DOUBLE PRECISION NOT NULL DEFAULT 0,
+        packet_loss DOUBLE PRECISION NOT NULL DEFAULT 0,
+        last_updated TIMESTAMPTZ,
         last_ip TEXT,
-        metadata TEXT DEFAULT '{}',
-        services TEXT NOT NULL DEFAULT '{}',
-        uptime_pct REAL DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
-        bandwidth_down_mbps REAL DEFAULT 0,
-        bandwidth_up_mbps REAL DEFAULT 0,
-        packet_loss_pct REAL DEFAULT 0,
-        sessions_count INTEGER DEFAULT 0,
-        earnings_usd REAL DEFAULT 0,
-        reported_upload_cap_mbps REAL DEFAULT 0,
-        reported_download_cap_mbps REAL DEFAULT 0,
+        metadata JSONB DEFAULT '{}'::jsonb,
+        services JSONB NOT NULL DEFAULT '{}'::jsonb,
+        uptime_pct DOUBLE PRECISION DEFAULT 0,
+        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
+        bandwidth_down_mbps DOUBLE PRECISION DEFAULT 0,
+        bandwidth_up_mbps DOUBLE PRECISION DEFAULT 0,
+        packet_loss_pct DOUBLE PRECISION DEFAULT 0,
+        trust_score DOUBLE PRECISION DEFAULT 0,
+        sessions_count BIGINT DEFAULT 0,
+        earnings_usd DOUBLE PRECISION DEFAULT 0,
+        reported_upload_cap_mbps DOUBLE PRECISION DEFAULT 0,
+        reported_download_cap_mbps DOUBLE PRECISION DEFAULT 0,
         supported_encryption TEXT DEFAULT 'noise-xx',
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
     )"#,
     r#"CREATE TABLE IF NOT EXISTS node_metrics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id BIGSERIAL PRIMARY KEY,
         node_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
-        latency_ms REAL DEFAULT 0,
-        bandwidth_down_mbps REAL DEFAULT 0,
-        bandwidth_up_mbps REAL DEFAULT 0,
-        packet_loss_pct REAL DEFAULT 0,
-        quality_score REAL DEFAULT 0,
-        earnings_usd REAL DEFAULT 0,
-        recorded_at TEXT DEFAULT (datetime('now'))
+        latency_ms DOUBLE PRECISION DEFAULT 0,
+        bandwidth_down_mbps DOUBLE PRECISION DEFAULT 0,
+        bandwidth_up_mbps DOUBLE PRECISION DEFAULT 0,
+        packet_loss_pct DOUBLE PRECISION DEFAULT 0,
+        quality_score DOUBLE PRECISION DEFAULT 0,
+        earnings_usd DOUBLE PRECISION DEFAULT 0,
+        recorded_at TEXT DEFAULT (now() AT TIME ZONE 'utc')
     )"#,
     r#"CREATE TABLE IF NOT EXISTS network_metrics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id BIGSERIAL PRIMARY KEY,
         user_id TEXT NOT NULL,
-        active_nodes INTEGER DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
-        bandwidth_egress_mb REAL DEFAULT 0,
-        bandwidth_ingress_mb REAL DEFAULT 0,
-        packet_loss_pct REAL DEFAULT 0,
-        uptime_pct REAL DEFAULT 0,
-        earnings_usd REAL DEFAULT 0,
-        recorded_at TEXT DEFAULT (datetime('now'))
+        active_nodes BIGINT DEFAULT 0,
+        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
+        bandwidth_egress_mb DOUBLE PRECISION DEFAULT 0,
+        bandwidth_ingress_mb DOUBLE PRECISION DEFAULT 0,
+        packet_loss_pct DOUBLE PRECISION DEFAULT 0,
+        uptime_pct DOUBLE PRECISION DEFAULT 0,
+        earnings_usd DOUBLE PRECISION DEFAULT 0,
+        recorded_at TEXT DEFAULT (now() AT TIME ZONE 'utc')
     )"#,
     r#"CREATE TABLE IF NOT EXISTS node_intelligence (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id BIGSERIAL PRIMARY KEY,
         node_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
-        quality_score REAL DEFAULT 0,
-        trust_score REAL DEFAULT 0,
-        anomaly_score REAL DEFAULT 0,
-        is_anomalous INTEGER DEFAULT 0,
-        cluster_id INTEGER DEFAULT 0,
-        feature_vector TEXT,
-        recorded_at TEXT DEFAULT (datetime('now'))
+        quality_score DOUBLE PRECISION DEFAULT 0,
+        trust_score DOUBLE PRECISION DEFAULT 0,
+        anomaly_score DOUBLE PRECISION DEFAULT 0,
+        is_anomalous BOOLEAN DEFAULT FALSE,
+        cluster_id BIGINT DEFAULT 0,
+        feature_vector JSONB,
+        recorded_at TEXT DEFAULT (now() AT TIME ZONE 'utc')
     )"#,
     r#"CREATE TABLE IF NOT EXISTS peer_reputation (
         peer_id TEXT PRIMARY KEY,
-        reputation_score REAL DEFAULT 0.5,
-        total_bytes_relayed INTEGER DEFAULT 0,
-        successful_sessions INTEGER DEFAULT 0,
-        failed_sessions INTEGER DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
+        reputation_score DOUBLE PRECISION DEFAULT 0.5,
+        total_bytes_relayed BIGINT DEFAULT 0,
+        successful_sessions BIGINT DEFAULT 0,
+        failed_sessions BIGINT DEFAULT 0,
+        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
         last_active_at TEXT,
-        recorded_at TEXT DEFAULT (datetime('now'))
+        recorded_at TEXT DEFAULT (now() AT TIME ZONE 'utc')
     )"#,
     r#"CREATE TABLE IF NOT EXISTS connection_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id BIGSERIAL PRIMARY KEY,
         local_peer_id TEXT NOT NULL,
         remote_peer_id TEXT NOT NULL,
         remote_ip TEXT,
         remote_port INTEGER,
         direction TEXT NOT NULL,
-        bytes_sent INTEGER DEFAULT 0,
-        bytes_received INTEGER DEFAULT 0,
-        duration_secs REAL DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
+        bytes_sent BIGINT DEFAULT 0,
+        bytes_received BIGINT DEFAULT 0,
+        duration_secs DOUBLE PRECISION DEFAULT 0,
+        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
         exit_reason TEXT,
-        started_at TEXT DEFAULT (datetime('now')),
+        started_at TEXT DEFAULT (now() AT TIME ZONE 'utc'),
         ended_at TEXT
     )"#,
     r#"CREATE TABLE IF NOT EXISTS state_receipts (
@@ -113,25 +113,25 @@ const SCHEMA: &[&str] = &[
         session_id TEXT NOT NULL,
         signer_peer_id TEXT NOT NULL,
         counterparty_peer_id TEXT NOT NULL,
-        bytes_transferred INTEGER DEFAULT 0,
+        bytes_transferred BIGINT DEFAULT 0,
         direction TEXT NOT NULL,
-        sequence_number INTEGER DEFAULT 0,
-        timestamp_secs INTEGER DEFAULT 0,
+        sequence_number BIGINT DEFAULT 0,
+        timestamp_secs BIGINT DEFAULT 0,
         signature TEXT NOT NULL
     )"#,
     r#"CREATE TABLE IF NOT EXISTS capability_descriptors (
         peer_id TEXT PRIMARY KEY,
-        public_key BLOB NOT NULL,
+        public_key BYTEA NOT NULL,
         region TEXT NOT NULL,
-        upload_cap_mbps REAL DEFAULT 0,
-        download_cap_mbps REAL DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
-        reputation_score REAL DEFAULT 0.5,
+        upload_cap_mbps DOUBLE PRECISION DEFAULT 0,
+        download_cap_mbps DOUBLE PRECISION DEFAULT 0,
+        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
+        reputation_score DOUBLE PRECISION DEFAULT 0.5,
         supported_encryption TEXT DEFAULT '["noise-xx"]',
         max_sessions INTEGER DEFAULT 1,
         active_sessions INTEGER DEFAULT 0,
-        last_updated INTEGER DEFAULT 0,
-        noise_public_key BLOB DEFAULT X'00'
+        last_updated BIGINT DEFAULT 0,
+        noise_public_key BYTEA DEFAULT E'\\x00'
     )"#,
     "CREATE INDEX IF NOT EXISTS idx_conn_history_local ON connection_history(local_peer_id)",
     "CREATE INDEX IF NOT EXISTS idx_conn_history_remote ON connection_history(remote_peer_id)",
@@ -142,39 +142,68 @@ const SCHEMA: &[&str] = &[
 /// Inline migrations: each entry is a single, complete SQL statement.
 /// Using a slice avoids split-on-semicolon fragility with literals.
 const MIGRATIONS: &[&str] = &[
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS uptime REAL DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS services TEXT NOT NULL DEFAULT '{}'",
-    "ALTER TABLE capability_descriptors ADD COLUMN IF NOT EXISTS noise_public_key BLOB DEFAULT X'00'",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'EchoNode'",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'anonymous'",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS peer_id TEXT",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS public_key TEXT",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS ip_address TEXT",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS region TEXT",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'offline'",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_seen_at TEXT",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS uptime DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS latency DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bandwidth_used DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS earnings DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS packet_loss DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_updated TIMESTAMPTZ",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_ip TEXT",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS services JSONB NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS uptime_pct DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS avg_latency_ms DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bandwidth_down_mbps DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bandwidth_up_mbps DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS packet_loss_pct DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS trust_score DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS sessions_count BIGINT DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS earnings_usd DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS reported_upload_cap_mbps DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS reported_download_cap_mbps DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS supported_encryption TEXT DEFAULT 'noise-xx'",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
+    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()",
+    "ALTER TABLE capability_descriptors ADD COLUMN IF NOT EXISTS noise_public_key BYTEA DEFAULT E'\\x00'",
+    // Convert legacy TEXT[] → TEXT (JSON) for supported_encryption; no-op if already TEXT
+    "ALTER TABLE capability_descriptors ALTER COLUMN supported_encryption TYPE TEXT USING to_json(supported_encryption)::text",
+    // Upgrade created_at/updated_at from TEXT to TIMESTAMPTZ; no-op if already correct type
+    "ALTER TABLE nodes ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::TIMESTAMPTZ",
+    "ALTER TABLE nodes ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at::TIMESTAMPTZ",
 ];
 
-impl SqliteStore {
-    pub async fn new(db_path: &str) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(db_path)
-            .context("invalid db path")?
-            .create_if_missing(true);
+impl NeonStore {
+    pub async fn new(database_url: &str) -> Result<Self> {
+        let options =
+            PgConnectOptions::from_str(database_url).context("invalid Neon/Postgres database URL")?;
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(Duration::from_secs(5))
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .min_connections(1)
+            // Neon serverless computes can have cold-start latency; give enough
+            // time for the compute to wake up before reporting a connection error.
+            .acquire_timeout(Duration::from_secs(10))
+            // Recycle idle connections before Neon's 5-minute inactivity suspension
+            // would make them stale.
+            .idle_timeout(Duration::from_secs(240))
+            // Hard ceiling on connection age to avoid using connections that were
+            // established before a Neon compute restart.
+            .max_lifetime(Duration::from_secs(1800))
+            // Ping the connection before handing it out so stale post-suspend
+            // connections are detected and replaced immediately.
+            .test_before_acquire(true)
             .connect_with(options)
             .await
-            .context("failed to connect sqlite")?;
-
-        // Enable WAL mode for better read concurrency and crash safety.
-        // busy_timeout prevents SQLITE_BUSY errors when background tasks
-        // contend on the single write connection.
-        sqlx::query("PRAGMA journal_mode=WAL")
-            .execute(&pool)
-            .await
-            .context("sqlite set WAL mode")?;
-        sqlx::query("PRAGMA busy_timeout=5000")
-            .execute(&pool)
-            .await
-            .context("sqlite set busy_timeout")?;
-        sqlx::query("PRAGMA synchronous=NORMAL")
-            .execute(&pool)
-            .await
-            .context("sqlite set synchronous")?;
+            .context("failed to connect to Neon/Postgres")?;
 
         for &sql in SCHEMA {
             sqlx::query(sql)
@@ -183,8 +212,10 @@ impl SqliteStore {
                 .context("failed to create schema")?;
         }
 
-        // Each migration is idempotent (IF NOT EXISTS guards).
         for &sql in MIGRATIONS {
+            // Each migration is idempotent (IF NOT EXISTS / IF EXISTS guards).
+            // Errors from no-op migrations (e.g. column already correct type) are
+            // intentionally ignored to allow re-runs on already-migrated databases.
             let _ = sqlx::query(sql).execute(&pool).await;
         }
 
@@ -204,34 +235,34 @@ impl SqliteStore {
                 last_seen_at, uptime_pct, avg_latency_ms, bandwidth_down_mbps,
                 bandwidth_up_mbps, packet_loss_pct, sessions_count, earnings_usd,
                 supported_encryption, services)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb)
             ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                user_id = excluded.user_id,
-                peer_id = excluded.peer_id,
-                public_key = excluded.public_key,
-                region = excluded.region,
-                status = excluded.status,
-                uptime = excluded.uptime,
-                latency = excluded.latency,
-                bandwidth_used = excluded.bandwidth_used,
-                quality_score = excluded.quality_score,
-                earnings = excluded.earnings,
-                packet_loss = excluded.packet_loss,
-                trust_score = excluded.trust_score,
-                reported_upload_cap_mbps = excluded.reported_upload_cap_mbps,
-                reported_download_cap_mbps = excluded.reported_download_cap_mbps,
-                last_seen_at = excluded.last_seen_at,
-                uptime_pct = excluded.uptime_pct,
-                avg_latency_ms = excluded.avg_latency_ms,
-                bandwidth_down_mbps = excluded.bandwidth_down_mbps,
-                bandwidth_up_mbps = excluded.bandwidth_up_mbps,
-                packet_loss_pct = excluded.packet_loss_pct,
-                sessions_count = excluded.sessions_count,
-                earnings_usd = excluded.earnings_usd,
-                supported_encryption = excluded.supported_encryption,
-                services = excluded.services,
-                updated_at = datetime('now')"#,
+                name = EXCLUDED.name,
+                user_id = EXCLUDED.user_id,
+                peer_id = EXCLUDED.peer_id,
+                public_key = EXCLUDED.public_key,
+                region = EXCLUDED.region,
+                status = EXCLUDED.status,
+                uptime = EXCLUDED.uptime,
+                latency = EXCLUDED.latency,
+                bandwidth_used = EXCLUDED.bandwidth_used,
+                quality_score = EXCLUDED.quality_score,
+                earnings = EXCLUDED.earnings,
+                packet_loss = EXCLUDED.packet_loss,
+                trust_score = EXCLUDED.trust_score,
+                reported_upload_cap_mbps = EXCLUDED.reported_upload_cap_mbps,
+                reported_download_cap_mbps = EXCLUDED.reported_download_cap_mbps,
+                last_seen_at = EXCLUDED.last_seen_at,
+                uptime_pct = EXCLUDED.uptime_pct,
+                avg_latency_ms = EXCLUDED.avg_latency_ms,
+                bandwidth_down_mbps = EXCLUDED.bandwidth_down_mbps,
+                bandwidth_up_mbps = EXCLUDED.bandwidth_up_mbps,
+                packet_loss_pct = EXCLUDED.packet_loss_pct,
+                sessions_count = EXCLUDED.sessions_count,
+                earnings_usd = EXCLUDED.earnings_usd,
+                supported_encryption = EXCLUDED.supported_encryption,
+                services = EXCLUDED.services,
+                updated_at = now()"#,
         )
         .bind(&row.id)
         .bind(&row.name)
@@ -262,7 +293,7 @@ impl SqliteStore {
         .bind(&services)
         .execute(&self.pool)
         .await
-        .context("sqlite upsert node")?;
+        .context("neon upsert node")?;
         Ok(())
     }
 
@@ -270,7 +301,7 @@ impl SqliteStore {
         sqlx::query(
             r#"INSERT INTO node_metrics (node_id, user_id, latency_ms, bandwidth_down_mbps,
                 bandwidth_up_mbps, packet_loss_pct, quality_score, earnings_usd, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
         )
         .bind(&row.node_id)
         .bind(&row.user_id)
@@ -283,7 +314,7 @@ impl SqliteStore {
         .bind(&row.recorded_at)
         .execute(&self.pool)
         .await
-        .context("sqlite insert node_metrics")?;
+        .context("neon insert node_metrics")?;
         Ok(())
     }
 
@@ -291,7 +322,7 @@ impl SqliteStore {
         sqlx::query(
             r#"INSERT INTO network_metrics (user_id, active_nodes, avg_latency_ms, bandwidth_egress_mb,
                 bandwidth_ingress_mb, packet_loss_pct, uptime_pct, earnings_usd, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
         )
         .bind(&row.user_id)
         .bind(row.active_nodes)
@@ -304,7 +335,7 @@ impl SqliteStore {
         .bind(&row.recorded_at)
         .execute(&self.pool)
         .await
-        .context("sqlite insert network_metrics")?;
+        .context("neon insert network_metrics")?;
         Ok(())
     }
 
@@ -313,26 +344,26 @@ impl SqliteStore {
         sqlx::query(
             r#"INSERT INTO node_intelligence (node_id, user_id, quality_score, trust_score,
                 anomaly_score, is_anomalous, cluster_id, feature_vector, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)"#,
         )
         .bind(&row.node_id)
         .bind(&row.user_id)
         .bind(row.quality_score)
         .bind(row.trust_score)
         .bind(row.anomaly_score)
-        .bind(row.is_anomalous.map(|b| b as i32))
+        .bind(row.is_anomalous)
         .bind(row.cluster_id)
         .bind(&fv)
         .bind(&row.recorded_at)
         .execute(&self.pool)
         .await
-        .context("sqlite insert node_intelligence")?;
+        .context("neon insert node_intelligence")?;
         Ok(())
     }
 }
 
 #[async_trait]
-impl MetricsBackend for SqliteStore {
+impl MetricsBackend for NeonStore {
     async fn upsert_node(&self, row: &NodeRow) -> Result<()> {
         self.upsert_node(row).await
     }
@@ -347,31 +378,35 @@ impl MetricsBackend for SqliteStore {
     }
 
     async fn cleanup_old_metrics(&self, days: i64) -> Result<u64> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
-        let cutoff_str = cutoff.to_rfc3339();
-        let r1 = sqlx::query("DELETE FROM node_metrics WHERE recorded_at < ?")
-            .bind(&cutoff_str)
-            .execute(&self.pool)
-            .await
-            .context("sqlite cleanup node_metrics")?;
-        let r2 = sqlx::query("DELETE FROM network_metrics WHERE recorded_at < ?")
-            .bind(&cutoff_str)
-            .execute(&self.pool)
-            .await
-            .context("sqlite cleanup network_metrics")?;
-        let r3 = sqlx::query("DELETE FROM node_intelligence WHERE recorded_at < ?")
-            .bind(&cutoff_str)
-            .execute(&self.pool)
-            .await
-            .context("sqlite cleanup node_intelligence")?;
-        let r4 = sqlx::query(
-            "DELETE FROM connection_history WHERE ended_at < ? OR (ended_at IS NULL AND started_at < ?)",
+        let r1 = sqlx::query(
+            "DELETE FROM node_metrics WHERE recorded_at < (now() AT TIME ZONE 'utc') - INTERVAL '1 day' * $1",
         )
-        .bind(&cutoff_str)
-        .bind(&cutoff_str)
+        .bind(days)
         .execute(&self.pool)
         .await
-        .context("sqlite cleanup connection_history")?;
+        .context("neon cleanup node_metrics")?;
+        let r2 = sqlx::query(
+            "DELETE FROM network_metrics WHERE recorded_at < (now() AT TIME ZONE 'utc') - INTERVAL '1 day' * $1",
+        )
+        .bind(days)
+        .execute(&self.pool)
+        .await
+        .context("neon cleanup network_metrics")?;
+        let r3 = sqlx::query(
+            "DELETE FROM node_intelligence WHERE recorded_at < (now() AT TIME ZONE 'utc') - INTERVAL '1 day' * $1",
+        )
+        .bind(days)
+        .execute(&self.pool)
+        .await
+        .context("neon cleanup node_intelligence")?;
+        let r4 = sqlx::query(
+            "DELETE FROM connection_history WHERE ended_at < (now() AT TIME ZONE 'utc') - INTERVAL '1 day' * $1 \
+             OR (ended_at IS NULL AND started_at < (now() AT TIME ZONE 'utc') - INTERVAL '1 day' * $1)",
+        )
+        .bind(days)
+        .execute(&self.pool)
+        .await
+        .context("neon cleanup connection_history")?;
         Ok(r1.rows_affected() + r2.rows_affected() + r3.rows_affected() + r4.rows_affected())
     }
 
@@ -379,14 +414,14 @@ impl MetricsBackend for SqliteStore {
         sqlx::query(
             r#"INSERT INTO peer_reputation (peer_id, reputation_score, total_bytes_relayed,
                 successful_sessions, failed_sessions, avg_latency_ms, last_active_at, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
             ON CONFLICT(peer_id) DO UPDATE SET
-                total_bytes_relayed = peer_reputation.total_bytes_relayed + excluded.total_bytes_relayed,
-                successful_sessions = peer_reputation.successful_sessions + excluded.successful_sessions,
-                failed_sessions = peer_reputation.failed_sessions + excluded.failed_sessions,
-                avg_latency_ms = excluded.avg_latency_ms,
-                last_active_at = excluded.last_active_at,
-                recorded_at = excluded.recorded_at"#,
+                total_bytes_relayed = peer_reputation.total_bytes_relayed + EXCLUDED.total_bytes_relayed,
+                successful_sessions = peer_reputation.successful_sessions + EXCLUDED.successful_sessions,
+                failed_sessions = peer_reputation.failed_sessions + EXCLUDED.failed_sessions,
+                avg_latency_ms = EXCLUDED.avg_latency_ms,
+                last_active_at = EXCLUDED.last_active_at,
+                recorded_at = EXCLUDED.recorded_at"#,
         )
         .bind(&row.peer_id)
         .bind(row.reputation_score)
@@ -398,7 +433,7 @@ impl MetricsBackend for SqliteStore {
         .bind(&row.recorded_at)
         .execute(&self.pool)
         .await
-        .context("sqlite upsert peer_reputation")?;
+        .context("neon upsert peer_reputation")?;
         Ok(())
     }
 
@@ -407,12 +442,12 @@ impl MetricsBackend for SqliteStore {
             sqlx::query_as(
                 "SELECT peer_id, reputation_score, total_bytes_relayed, successful_sessions,
                  failed_sessions, avg_latency_ms, last_active_at, recorded_at
-                 FROM peer_reputation WHERE peer_id = ?",
+                 FROM peer_reputation WHERE peer_id = $1",
             )
             .bind(peer_id)
             .fetch_optional(&self.pool)
             .await
-            .context("sqlite get peer_reputation")?;
+            .context("neon get peer_reputation")?;
         Ok(row.map(|r| PeerReputation {
             peer_id: r.0,
             reputation_score: r.1,
@@ -430,7 +465,7 @@ impl MetricsBackend for SqliteStore {
             r#"INSERT INTO connection_history (local_peer_id, remote_peer_id, remote_ip, remote_port,
                 direction, bytes_sent, bytes_received, duration_secs, avg_latency_ms,
                 exit_reason, started_at, ended_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)"#,
         )
         .bind(&record.local_peer_id)
         .bind(&record.remote_peer_id)
@@ -446,7 +481,7 @@ impl MetricsBackend for SqliteStore {
         .bind(&record.ended_at)
         .execute(&self.pool)
         .await
-        .context("sqlite insert connection")?;
+        .context("neon insert connection")?;
         Ok(())
     }
 
@@ -462,24 +497,24 @@ impl MetricsBackend for SqliteStore {
     ) -> Result<()> {
         sqlx::query(
             r#"UPDATE connection_history SET
-                bytes_sent=?, bytes_received=?, duration_secs=?,
-                avg_latency_ms=?, exit_reason=?, ended_at=datetime('now')
+                bytes_sent=$3, bytes_received=$4, duration_secs=$5,
+                avg_latency_ms=$6, exit_reason=$7, ended_at=now() AT TIME ZONE 'utc'
             WHERE id = (
                 SELECT id FROM connection_history
-                WHERE local_peer_id=? AND remote_peer_id=? AND ended_at IS NULL
+                WHERE local_peer_id=$1 AND remote_peer_id=$2 AND ended_at IS NULL
                 ORDER BY id DESC LIMIT 1
             )"#,
         )
+        .bind(local_peer_id)
+        .bind(remote_peer_id)
         .bind(bytes_sent as i64)
         .bind(bytes_received as i64)
         .bind(duration_secs)
         .bind(avg_latency_ms)
         .bind(exit_reason)
-        .bind(local_peer_id)
-        .bind(remote_peer_id)
         .execute(&self.pool)
         .await
-        .context("sqlite update connection_end")?;
+        .context("neon update connection_end")?;
         Ok(())
     }
 
@@ -488,7 +523,7 @@ impl MetricsBackend for SqliteStore {
             r#"INSERT INTO state_receipts (receipt_id, session_id, signer_peer_id,
                 counterparty_peer_id, bytes_transferred, direction, sequence_number,
                 timestamp_secs, signature)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"#,
         )
         .bind(&receipt.receipt_id)
         .bind(&receipt.session_id)
@@ -501,7 +536,7 @@ impl MetricsBackend for SqliteStore {
         .bind(&receipt.signature)
         .execute(&self.pool)
         .await
-        .context("sqlite insert receipt")?;
+        .context("neon insert receipt")?;
         Ok(())
     }
 
@@ -510,12 +545,12 @@ impl MetricsBackend for SqliteStore {
             sqlx::query_as(
                 "SELECT receipt_id, session_id, signer_peer_id, counterparty_peer_id,
                  bytes_transferred, direction, sequence_number, timestamp_secs, signature
-                 FROM state_receipts WHERE session_id = ? ORDER BY sequence_number ASC",
+                 FROM state_receipts WHERE session_id = $1 ORDER BY sequence_number ASC",
             )
             .bind(session_id)
             .fetch_all(&self.pool)
             .await
-            .context("sqlite get receipts")?;
+            .context("neon get receipts")?;
         Ok(rows
             .into_iter()
             .map(|r| StateReceipt {
@@ -539,14 +574,14 @@ impl MetricsBackend for SqliteStore {
                 upload_cap_mbps, download_cap_mbps, avg_latency_ms, reputation_score,
                 supported_encryption, max_sessions, active_sessions, last_updated,
                 noise_public_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT(peer_id) DO UPDATE SET
-                public_key=excluded.public_key, region=excluded.region,
-                upload_cap_mbps=excluded.upload_cap_mbps, download_cap_mbps=excluded.download_cap_mbps,
-                avg_latency_ms=excluded.avg_latency_ms, reputation_score=excluded.reputation_score,
-                supported_encryption=excluded.supported_encryption, max_sessions=excluded.max_sessions,
-                active_sessions=excluded.active_sessions, last_updated=excluded.last_updated,
-                noise_public_key=excluded.noise_public_key"#,
+                public_key=EXCLUDED.public_key, region=EXCLUDED.region,
+                upload_cap_mbps=EXCLUDED.upload_cap_mbps, download_cap_mbps=EXCLUDED.download_cap_mbps,
+                avg_latency_ms=EXCLUDED.avg_latency_ms, reputation_score=EXCLUDED.reputation_score,
+                supported_encryption=EXCLUDED.supported_encryption, max_sessions=EXCLUDED.max_sessions,
+                active_sessions=EXCLUDED.active_sessions, last_updated=EXCLUDED.last_updated,
+                noise_public_key=EXCLUDED.noise_public_key"#,
         )
         .bind(&desc.peer_id)
         .bind(&desc.public_key)
@@ -562,7 +597,7 @@ impl MetricsBackend for SqliteStore {
         .bind(&desc.noise_public_key)
         .execute(&self.pool)
         .await
-        .context("sqlite upsert capability")?;
+        .context("neon upsert capability")?;
         Ok(())
     }
 
@@ -580,10 +615,10 @@ impl MetricsBackend for SqliteStore {
              avg_latency_ms, reputation_score, supported_encryption, max_sessions,
              active_sessions, last_updated, noise_public_key
              FROM capability_descriptors
-             WHERE region = ? AND upload_cap_mbps >= ? AND download_cap_mbps >= ?
+             WHERE region = $1 AND upload_cap_mbps >= $2 AND download_cap_mbps >= $3
              AND active_sessions < max_sessions
              ORDER BY reputation_score DESC, upload_cap_mbps DESC
-             LIMIT ?",
+             LIMIT $4",
         )
         .bind(region)
         .bind(min_upload_mbps)
@@ -591,7 +626,7 @@ impl MetricsBackend for SqliteStore {
         .bind(limit)
         .fetch_all(&self.pool)
         .await
-        .context("sqlite get capabilities")?;
+        .context("neon get capabilities")?;
         Ok(rows
             .into_iter()
             .map(|r| CapabilityDescriptor {
