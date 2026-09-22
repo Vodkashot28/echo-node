@@ -1,4 +1,5 @@
 pub mod availability;
+pub mod consumer;
 pub mod discovery;
 pub mod identity;
 pub mod meter;

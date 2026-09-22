@@ -1,6 +1,6 @@
 # Echo Node
 
-Rust daemon for the EchoMesh decentralized infrastructure network. A provider node that shares unused network capacity with consumers through Noise_XX-encrypted tunnels, discovered via a Kademlia DHT.
+Rust daemon for the EchoMesh decentralized infrastructure network. A node that either shares unused network capacity as a **provider** (Noise_XX-encrypted tunnels, discovered via a Kademlia DHT) or runs as a **consumer** that dials a provider and forwards local application traffic through the tunnel.
 
 ## Architecture Overview
 
@@ -310,11 +310,12 @@ Schema is created and upgraded by versioned SQL migrations (`migrations/{postgre
 ```
 src/
 ├── lib.rs              # MetricsBackend trait (16 methods) + shared base64 utils
-├── main.rs             # Heartbeat, REST API, 8 background tasks (1548 lines)
+├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (1650 lines)
 ├── models.rs           # 10 data models (NodeRow, PeerReputation, SettlementRecord, etc.)
 ├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, file permissions
 ├── discovery.rs        # libp2p Kademlia DHT swarm, provider discovery
-├── tunnel.rs           # Noise_XX handshake, bidirectional relay, backpressure (857 lines)
+├── tunnel.rs           # Noise_XX handshake, bidirectional relay, backpressure (906 lines)
+├── consumer.rs         # Consumer forward listener: local apps → provider tunnel
 ├── meter.rs            # Token bucket, signed receipts, session metering
 ├── availability.rs     # Capacity engine, session management
 ├── migrator.rs         # Versioned SQL migrations: splitter, apply, schema_migrations
@@ -395,6 +396,11 @@ cargo run --release
 | `RELAY_TARGET` | `127.0.0.1:80` | Target address for incoming tunnel relay |
 | `TUNNEL_ADDR` | `0.0.0.0:3002` | Tunnel listener bind address |
 | `SETTLEMENT_RATE_USD_PER_GB` | `0.50` | USD payout per GB relayed (accumulated on verified receipts) |
+| `NODE_MODE` | `provider` | `provider` (serve tunnels, advertise capacity) or `consumer` (dial a provider) |
+| `CONSUMER_LISTEN_ADDR` | `127.0.0.1:3003` | Local address local apps connect to in consumer mode |
+| `PROVIDER_ADDR` | (unset) | Provider's `TUNNEL_ADDR` — required in consumer mode |
+| `PROVIDER_PEER_ID` | (unset) | Provider's libp2p PeerId — required in consumer mode |
+| `PROVIDER_NOISE_PUBKEY` | (unset) | Provider's base64 X25519 Noise key for handshake pinning — required in consumer mode |
 | `RUST_LOG` | `echo_daemon=info` | Log level filter |
 
 ## Dependencies
@@ -417,20 +423,43 @@ cargo run --release
 
 ## Background Tasks
 
-The daemon spawns 8 concurrent background tasks on startup:
+The daemon spawns up to 8 concurrent background tasks on startup. The last
+four are gated on `NODE_MODE`: providers run the tunnel listener, capability
+publisher, and receipt settlement; consumers run a single forward listener
+instead (task 9).
 
 | # | Task | Line | Description |
 |---|------|------|-------------|
 | 1 | **Tunnel Event Handler** | 909 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
-| 2 | **Tunnel Listener** | 951 | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
+| 2 | **Tunnel Listener** | 951 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
 | 3 | **Discovery Event Loop** | 981 | Runs libp2p swarm event loop, handles DHT GetProviders/PutRecord results |
 | 4 | **Discovery Event Handler** | 986 | Processes `DiscoveryEvent::PeerFound/Disconnected/CapabilityPublished` |
 | 5 | **Heartbeat** | 1015 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
 | 6 | **Metric Cleanup** | 1021 | Removes metrics older than 30 days (daily) |
-| 7 | **Capability Publisher** | 1040 | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
-| 8 | **Receipt Settlement** | 1068 | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
+| 7 | **Capability Publisher** | 1040 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
+| 8 | **Receipt Settlement** | 1068 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
+| 9 | **Consumer Listener** | `consumer.rs` (consumer only) | Accepts local app connections on `CONSUMER_LISTEN_ADDR`, dials the provider (`connect_to_provider`), relays app traffic through the Noise tunnel without issuing consumer receipts |
 
 Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1148).
+
+## Consumer Mode Quick Start
+
+```bash
+# Provider side (unchanged)
+NODE_MODE=provider TUNNEL_ADDR=0.0.0.0:3002 cargo run --release
+
+# Consumer side — point local apps at 127.0.0.1:3003; the daemon tunnels
+# them to the provider, which relays to its RELAY_TARGET.
+NODE_MODE=consumer \
+  PROVIDER_ADDR=<provider-ip>:3002 \
+  PROVIDER_PEER_ID=<provider-peer-id> \
+  PROVIDER_NOISE_PUBKEY=<provider-base64-x25519-key> \
+  cargo run --release
+```
+
+The provider's Noise public key can be decoded from its capability record
+(`/match` against the provider or `capability_descriptors` table); the base64
+value must decode to exactly 32 bytes.
 
 ## Architecture Decisions
 

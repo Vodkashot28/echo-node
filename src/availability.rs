@@ -165,6 +165,11 @@ impl AvailabilityEngine {
         }
     }
 
+    /// Current number of active sessions (for observation/testing).
+    pub fn active_sessions(&self) -> u32 {
+        self.active_sessions
+    }
+
     /// Push a new latency sample into the rolling window.
     pub fn record_latency(&mut self, latency_ms: f64) {
         self.latency_samples.push_back(latency_ms);

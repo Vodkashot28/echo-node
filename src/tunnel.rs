@@ -237,6 +237,16 @@ impl TunnelService {
             .into_transport_mode()
             .context("failed to transition to transport mode")?;
 
+        // 6.5 Acquire a session slot (mirrors the provider-side flow so the
+        // availability engine tracks consumer sessions symmetrically, and
+        // session_closed/relay teardown can release it exactly once).
+        {
+            let mut avail = self.availability.write().await;
+            if let Err(e) = avail.try_acquire_session() {
+                return Err(anyhow!("no sessions available: {}", e));
+            }
+        }
+
         // 7. Register with metering engine
         self.metering
             .start_session(session_id, &remote_peer_id.to_string())
@@ -285,12 +295,43 @@ impl TunnelService {
             target_stream,
             session.transport.clone(),
             &session.session_id,
-            &self.metering,
+            Some(&self.metering),
             &mut bucket,
         )
         .await;
 
         // Notify metering that session ended
+        self.session_closed(&session.session_id).await;
+
+        Ok((bytes_sent, bytes_received))
+    }
+
+    /// Consumer-side relay: bridge an already-established encrypted tunnel
+    /// session to a local application's already-connected TCP stream.
+    ///
+    /// The consumer relays without metering (`None`) — the provider owns the
+    /// authoritative receipt stream. Teardown still releases the availability
+    /// slot acquired during `connect_to_provider`.
+    pub async fn relay_local_connection(
+        &self,
+        session: EncryptedTunnelSession,
+        app_stream: TcpStream,
+    ) -> Result<(u64, u64)> {
+        // Token bucket: use configured max upload bandwidth for rate limiting
+        let mut bucket =
+            TokenBucket::new(self.relay_config.max_upload_mbps, self.relay_config.max_upload_mbps);
+
+        let (bytes_sent, bytes_received, _avg_latency_ms) = Self::encrypted_relay_with_metering(
+            tokio::io::split(session.stream),
+            app_stream,
+            session.transport.clone(),
+            &session.session_id,
+            None,
+            &mut bucket,
+        )
+        .await;
+
+        // Release the availability slot bought in connect_to_provider.
         self.session_closed(&session.session_id).await;
 
         Ok((bytes_sent, bytes_received))
@@ -498,7 +539,7 @@ impl TunnelService {
             target_stream,
             transport,
             &session_id,
-            &config.metering,
+            Some(&config.metering),
             &mut TokenBucket::new(config.max_download_mbps, config.max_download_mbps),
         )
         .await;
@@ -599,6 +640,10 @@ impl TunnelService {
     /// and a plaintext target stream, recording each chunk to the
     /// metering engine.
     ///
+    /// `metering` is optional: the provider side passes `Some(engine)` to
+    /// sign authoritative receipts, while the consumer side relays with
+    /// `None` so it never issues receipts for traffic it merely forwards.
+    ///
     /// Uses `Arc<Mutex<TransportState>>` for concurrent encrypt/decrypt.
     /// Returns (bytes_sent, bytes_received, avg_latency_ms) where
     /// avg_latency_ms measures the mean Noise encrypt/decrypt processing time.
@@ -607,7 +652,7 @@ impl TunnelService {
         target_stream: TcpStream,
         transport: Arc<tokio::sync::Mutex<TransportState>>,
         session_id: &str,
-        metering: &MeteringEngine,
+        metering: Option<&MeteringEngine>,
         bucket: &mut TokenBucket,
     ) -> (u64, u64, f64) {
         use tokio::io::split;
@@ -624,7 +669,7 @@ impl TunnelService {
 
         // Consumer → Target (egress): decrypt from tunnel, forward to target
         let transport_egress = transport.clone();
-        let metering_egress = metering.clone();
+        let metering_egress = metering;
         let sid_e = session_id.to_string();
         let latency_egress = latency_state.clone();
         let to_target = async {
@@ -681,15 +726,17 @@ impl TunnelService {
                     break;
                 }
                 bytes_sent += plain_len as u64;
-                let _ = metering_egress
-                    .record_transfer(&sid_e, "egress", plain_len as u64)
-                    .await;
+                if let Some(metering) = metering_egress {
+                    let _ = metering
+                        .record_transfer(&sid_e, "egress", plain_len as u64)
+                        .await;
+                }
             }
         };
 
         // Target → Consumer (ingress): read from target, encrypt, forward to tunnel
         let transport_ingress = transport.clone();
-        let metering_ingress = metering.clone();
+        let metering_ingress = metering;
         let sid_i = session_id.to_string();
         let latency_ingress = latency_state.clone();
         let to_tunnel = async {
@@ -728,9 +775,11 @@ impl TunnelService {
                     break;
                 }
                 bytes_received += n as u64;
-                let _ = metering_ingress
-                    .record_transfer(&sid_i, "ingress", n as u64)
-                    .await;
+                if let Some(metering) = metering_ingress {
+                    let _ = metering
+                        .record_transfer(&sid_i, "ingress", n as u64)
+                        .await;
+                }
             }
         };
 

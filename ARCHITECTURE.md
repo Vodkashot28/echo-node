@@ -15,12 +15,12 @@ Detailed architectural analysis of the Echo Node daemon. For the high-level over
 
 ## Component Inventory
 
-### `lib.rs` — Crate Root (121 lines)
+### `lib.rs` — Crate Root (122 lines)
 
-Declares 10 modules plus shared base64 utilities and defines the `MetricsBackend` async trait with 16 methods.
+Declares 11 modules plus shared base64 utilities and defines the `MetricsBackend` async trait with 16 methods.
 
 ```
-pub mod { availability, discovery, identity, meter, migrator, models, neon, settlement, sqlite_store, tunnel }
+pub mod { availability, consumer, discovery, identity, meter, migrator, models, neon, settlement, sqlite_store, tunnel }
 pub use models::*          // blanket re-export of all data models
 pub use neon::NeonStore    // PostgreSQL backend
 pub use sqlite_store::SqliteStore  // SQLite backend
@@ -68,7 +68,7 @@ All 10 structs derive `Debug, Clone, Serialize, Deserialize`. They fall into thr
 
 ---
 
-### `identity.rs` — Cryptographic Identity (155 lines)
+### `identity.rs` — Cryptographic Identity (154 lines)
 
 Manages the node's long-lived key material: ed25519 (signing), libp2p PeerId, and X25519 (Noise_XX tunnel encryption).
 
@@ -129,7 +129,7 @@ pub enum DiscoveryEvent {
 
 ---
 
-### `tunnel.rs` — Noise_XX Encrypted Tunnel (857 lines)
+### `tunnel.rs` — Noise_XX Encrypted Tunnel (906 lines)
 
 The largest and most complex module. Handles the full tunnel lifecycle: pre-handshake exchange, Noise_XX handshake, bidirectional encrypted relay, and session teardown.
 
@@ -167,6 +167,33 @@ pub enum TunnelEvent {
     SessionClosed { session_id: String, bytes_sent: u64, bytes_received: u64 },
 }
 ```
+
+**Dual role design:** `TunnelService` is mode-agnostic. In provider mode `accept_incoming` awaits handshakes; in consumer mode `connect_to_provider` initiates them (the same service instance backs both roles — see `consumer.rs`).
+
+- `connect_to_provider(remote_addr, remote_peer_id, session_id, expected_noise_pubkey)` — consumer-side initiator: semaphore permit → TCP + session/peer pre-exchange → Noise_XX (Msg1/2/3) → **static-key pinning** against the expected X25519 key → acquires an availability slot (symmetric with the provider flow) → returns an `EncryptedTunnelSession`.
+- `relay_data(session, target_addr)` — provider-style helper: connects to a target and relays with metering (`Some`).
+- `relay_local_connection(session, app_stream)` — consumer-style helper: bridges the tunnel to an already-connected local app stream, relays with metering **disabled** (`None` — a consumer never issues authoritative receipts for forwarded traffic), then runs standard teardown (releases the availability slot).
+- `encrypted_relay_with_metering(...)` — shared relay core; the metering argument is `Option<&MeteringEngine>` exactly to support the two roles above.
+
+---
+
+### `consumer.rs` — Consumer Forward Listener (125 lines)
+
+Runs the daemon in consumer mode (`NODE_MODE=consumer`): instead of advertising capacity and accepting inbound tunnels, the node runs a local TCP listener that bridges local application traffic into an encrypted tunnel to a configured provider.
+
+```rust
+pub struct ConsumerConfig {
+    pub listen_addr: String,          // CONSUMER_LISTEN_ADDR (default 127.0.0.1:3003)
+    pub provider_addr: String,        // PROVIDER_ADDR — provider's TUNNEL_ADDR
+    pub provider_peer_id: libp2p::PeerId,  // PROVIDER_PEER_ID
+    pub provider_noise_pubkey: Vec<u8>,    // PROVIDER_NOISE_PUBKEY (base64, pinned in handshake)
+}
+pub async fn run_consumer_listener(service: Arc<TunnelService>, config: ConsumerConfig) -> Result<()>
+```
+
+**Per-connection flow:** `listener.accept()` → spawn → `connect_to_provider` (full XX handshake + key pinning) → `relay_local_connection` (relay without metering) → teardown. Session ids are generated as `consumer-<seq>-<peer_suffix>` (unique, bounded below the 256-byte wire limit).
+
+**Availability invariant:** `connect_to_provider` acquires a session slot and `relay_local_connection`'s teardown releases it exactly once — the availability engine tracks consumer sessions symmetrically with provider sessions.
 
 ---
 
@@ -225,7 +252,7 @@ pub struct SettlementEngine {
 
 ---
 
-### `availability.rs` — Capacity Engine (266 lines)
+### `availability.rs` — Capacity Engine (271 lines)
 
 Computes how much bandwidth to advertise to the DHT based on current system load.
 
@@ -248,12 +275,13 @@ pub struct AvailabilityEngine {
 6. Apply Session factor: `0.0` if at max, else `1.0 - (active/max * 0.3)` — up to 30% reduction
 
 **Session management:**
-- `try_acquire_session()` — increments counter, returns `Err` if at max
-- `release_session()` — decrements counter
+- `try_acquire_session()` — increments counter, returns `Err` if at max (called by both provider accepts and consumer `connect_to_provider`)
+- `release_session()` — decrements counter (via standard session teardown)
+- `active_sessions()` — read-only getter (used by tests to verify slot balance)
 
 ---
 
-### `neon.rs` — PostgreSQL Backend (487 lines)
+### `neon.rs` — PostgreSQL Backend (548 lines)
 
 Neon PostgreSQL implementation of `MetricsBackend`.
 
@@ -269,7 +297,7 @@ Neon PostgreSQL implementation of `MetricsBackend`.
 
 ---
 
-### `sqlite_store.rs` — SQLite Backend (478 lines)
+### `sqlite_store.rs` — SQLite Backend (538 lines)
 
 SQLite implementation of `MetricsBackend`.
 
@@ -284,7 +312,7 @@ SQLite implementation of `MetricsBackend`.
 
 ---
 
-### `migrator.rs` — Versioned SQL Migrations (398 lines)
+### `migrator.rs` — Versioned SQL Migrations (408 lines)
 
 Applies embedded, versioned SQL migrations on startup.
 
@@ -298,7 +326,7 @@ Applies embedded, versioned SQL migrations on startup.
 
 ---
 
-### `main.rs` — Orchestrator (1548 lines)
+### `main.rs` — Orchestrator (1650 lines)
 
 The entry point. Wires together all services and manages the daemon lifecycle.
 
@@ -308,7 +336,13 @@ The entry point. Wires together all services and manages the daemon lifecycle.
 - `DaemonStatus` — 8-field struct for `/status`
 - `HealthResponse` — 8-field struct for `/health`
 - `MetricsState` — shared mutable state behind `Arc<RwLock<_>>`
+- `Config` — env-driven runtime configuration (adds `node_mode`, `consumer_listen_addr`, `provider_addr`, `provider_peer_id`, `provider_noise_pubkey` on top of the provider settings)
 - `AppState` — `{ metrics: Arc<RwLock<MetricsState>>, backend: Arc<dyn MetricsBackend>, settlement: SettlementEngine }`
+
+**Mode gating (`NODE_MODE`):**
+- **`provider`** (default) — spawns the incoming tunnel listener (`accept_incoming`), the capability publisher, and the receipt settlement task.
+- **`consumer`** — validates `PROVIDER_ADDR` + `PROVIDER_PEER_ID` + `PROVIDER_NOISE_PUBKEY` (base64, must decode to 32 bytes), decodes the provider's X25519 key, and spawns `run_consumer_listener` instead. The tunnel listener, capability publisher, and receipt settlement task are **not** started (a consumer advertises nothing and never settles its own forwarded traffic).
+- `TunnelService` is wrapped in `Arc` so both the provider listener and the consumer forward listener can share one instance.
 
 **API key authentication:**
 ```rust
@@ -400,13 +434,16 @@ Phase 3: spawn_blocking(ping) → state.write() → upsert to DB → release
 
 ```
 tokio::spawn(heartbeat(...))           // periodic, 10s interval
-tokio::spawn(capability_publisher(...)) // periodic, 60s interval
-tokio::spawn(receipt_settlement(...))   // event-driven, shutdown-aware
 tokio::spawn(metric_cleanup(...))       // periodic, daily
 tokio::spawn(discovery.run())           // continuous event loop
-tokio::spawn(tunnel_listener(...))      // continuous TCP accept loop
 tokio::spawn(axum_server)               // continuous HTTP server
 // graceful shutdown: signal handler + channel drain
+// provider mode only:
+tokio::spawn(capability_publisher(...)) // periodic, 60s interval
+tokio::spawn(receipt_settlement(...))   // event-driven, shutdown-aware
+tokio::spawn(tunnel_listener(...))      // continuous TCP accept loop
+// consumer mode only:
+tokio::spawn(consumer_listener(...))    // accept local apps → provider tunnel
 ```
 
 ---

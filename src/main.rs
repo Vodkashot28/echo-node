@@ -1,4 +1,5 @@
 use echo_daemon::availability::AvailabilityEngine;
+use echo_daemon::consumer::run_consumer_listener;
 use echo_daemon::discovery::DiscoveryService;
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
@@ -69,6 +70,8 @@ const DEFAULT_RETENTION_DAYS: i64 = 30;
 const DEFAULT_EARNINGS_PER_RU: f64 = 0.0001;
 const DEFAULT_SETTLEMENT_RATE_USD_PER_GB: f64 = 0.50;
 const DEFAULT_UNHEALTHY_THRESHOLD_SECS: u64 = 30;
+const DEFAULT_CONSUMER_LISTEN_ADDR: &str = "127.0.0.1:3003";
+const NOISE_PUBKEY_LEN: usize = 32;
 
 /// Runtime configuration parsed from environment variables.
 struct Config {
@@ -101,6 +104,16 @@ struct Config {
     neon_max_connections: u32,
     neon_acquire_timeout_secs: u64,
     neon_idle_timeout_secs: u64,
+    /// "provider" (advertise + serve tunnels) or "consumer" (dial a provider).
+    node_mode: String,
+    /// Local address for the consumer forward listener.
+    consumer_listen_addr: String,
+    /// Provider tunnel address required in consumer mode.
+    provider_addr: Option<String>,
+    /// Provider libp2p PeerId (string form) required in consumer mode.
+    provider_peer_id: Option<String>,
+    /// Provider Noise static public key (base64) required in consumer mode.
+    provider_noise_pubkey: Option<String>,
 }
 
 impl Config {
@@ -144,6 +157,16 @@ impl Config {
             neon_max_connections: env_u32("NEON_MAX_CONNECTIONS", 5),
             neon_acquire_timeout_secs: env_u64("NEON_ACQUIRE_TIMEOUT_SECS", 10),
             neon_idle_timeout_secs: env_u64("NEON_IDLE_TIMEOUT_SECS", 240),
+            node_mode: std::env::var("NODE_MODE")
+                .unwrap_or_else(|_| "provider".to_string())
+                .to_ascii_lowercase(),
+            consumer_listen_addr: std::env::var("CONSUMER_LISTEN_ADDR")
+                .unwrap_or_else(|_| DEFAULT_CONSUMER_LISTEN_ADDR.to_string()),
+            provider_addr: std::env::var("PROVIDER_ADDR").ok().filter(|v| !v.is_empty()),
+            provider_peer_id: std::env::var("PROVIDER_PEER_ID").ok().filter(|v| !v.is_empty()),
+            provider_noise_pubkey: std::env::var("PROVIDER_NOISE_PUBKEY")
+                .ok()
+                .filter(|v| !v.is_empty()),
         }
     }
 }
@@ -1034,6 +1057,27 @@ async fn main() -> Result<()> {
 
     let config = Config::from_env();
 
+    // Validate the operating mode before touching anything else.
+    if !matches!(config.node_mode.as_str(), "provider" | "consumer") {
+        anyhow::bail!(
+            "NODE_MODE must be 'provider' or 'consumer', got '{}'",
+            config.node_mode
+        );
+    }
+    if config.node_mode == "consumer" {
+        if config.provider_addr.is_none() {
+            anyhow::bail!("consumer mode requires PROVIDER_ADDR (the provider's TUNNEL_ADDR)");
+        }
+        if config.provider_peer_id.is_none() {
+            anyhow::bail!("consumer mode requires PROVIDER_PEER_ID (the provider's libp2p PeerId)");
+        }
+        if config.provider_noise_pubkey.is_none() {
+            anyhow::bail!(
+                "consumer mode requires PROVIDER_NOISE_PUBKEY (the provider's base64 X25519 key)"
+            );
+        }
+    }
+
     // Step 1: Load or generate node identity
     let identity = NodeIdentity::load_or_generate(&config.identity_path, &config.region)?;
     info!(
@@ -1091,6 +1135,9 @@ async fn main() -> Result<()> {
         config.max_sessions as usize,
         identity.noise_secret_key_bytes().to_vec(),
     );
+    // Shared so both the listener and (in consumer mode) the forward
+    // listener can reference the same service.
+    let tunnel_service = Arc::new(tunnel_service);
 
     // Spawn tunnel event handler
     // NOTE: end_session is called inside handle_incoming_connection (provider side)
@@ -1126,33 +1173,72 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Spawn incoming tunnel listener (provider side)
-    let tunnel_event_tx = tunnel_service.event_tx().clone();
-    let relay_config = echo_daemon::tunnel::RelayConfig {
-        backend: tunnel_service.relay_config().backend.clone(),
-        metering: tunnel_service.relay_config().metering.clone(),
-        availability: tunnel_service.relay_config().availability.clone(),
-        target_addr: tunnel_service.relay_config().target_addr.clone(),
-        local_peer_id: tunnel_service.relay_config().local_peer_id.clone(),
-        max_upload_mbps: tunnel_service.relay_config().max_upload_mbps,
-        max_download_mbps: tunnel_service.relay_config().max_download_mbps,
-    };
-    let conn_semaphore = tunnel_service.conn_semaphore();
-    let static_private_key = tunnel_service.static_private_key();
-    let tunnel_addr = config.tunnel_listen_addr.clone();
-    tokio::spawn(async move {
-        if let Err(e) = TunnelService::accept_incoming(
-            &tunnel_addr,
-            tunnel_event_tx,
-            relay_config,
-            conn_semaphore,
-            static_private_key,
-        )
-        .await
-        {
-            error!(error = %e, "tunnel listener failed");
+    // Spawn incoming tunnel listener (provider side) — or, in consumer mode,
+    // the consumer forward listener that relays local apps to a provider.
+    if config.node_mode == "provider" {
+        let tunnel_event_tx = tunnel_service.event_tx().clone();
+        let relay_config = echo_daemon::tunnel::RelayConfig {
+            backend: tunnel_service.relay_config().backend.clone(),
+            metering: tunnel_service.relay_config().metering.clone(),
+            availability: tunnel_service.relay_config().availability.clone(),
+            target_addr: tunnel_service.relay_config().target_addr.clone(),
+            local_peer_id: tunnel_service.relay_config().local_peer_id.clone(),
+            max_upload_mbps: tunnel_service.relay_config().max_upload_mbps,
+            max_download_mbps: tunnel_service.relay_config().max_download_mbps,
+        };
+        let conn_semaphore = tunnel_service.conn_semaphore();
+        let static_private_key = tunnel_service.static_private_key();
+        let tunnel_addr = config.tunnel_listen_addr.clone();
+        tokio::spawn(async move {
+            if let Err(e) = TunnelService::accept_incoming(
+                &tunnel_addr,
+                tunnel_event_tx,
+                relay_config,
+                conn_semaphore,
+                static_private_key,
+            )
+            .await
+            {
+                error!(error = %e, "tunnel listener failed");
+            }
+        });
+    } else {
+        // Consumer mode: parse the provider identity (validated above).
+        let provider_peer_id: libp2p::PeerId = config
+            .provider_peer_id
+            .as_deref()
+            .expect("validated above")
+            .parse()
+            .context("PROVIDER_PEER_ID is not a valid libp2p PeerId")?;
+        let provider_noise_pubkey = echo_daemon::base64_decode(
+            config.provider_noise_pubkey.as_deref().expect("validated above"),
+        );
+        if provider_noise_pubkey.len() != NOISE_PUBKEY_LEN {
+            anyhow::bail!(
+                "PROVIDER_NOISE_PUBKEY decodes to {} bytes, expected {} (X25519)",
+                provider_noise_pubkey.len(),
+                NOISE_PUBKEY_LEN
+            );
         }
-    });
+
+        let consumer_service = tunnel_service.clone();
+        let consumer_config = echo_daemon::consumer::ConsumerConfig {
+            listen_addr: config.consumer_listen_addr.clone(),
+            provider_addr: config.provider_addr.clone().expect("validated above"),
+            provider_peer_id,
+            provider_noise_pubkey,
+        };
+        info!(
+            listen_addr = %consumer_config.listen_addr,
+            provider = %consumer_config.provider_addr,
+            "consumer mode enabled; forwarding local connections to provider"
+        );
+        tokio::spawn(async move {
+            if let Err(e) = run_consumer_listener(consumer_service, consumer_config).await {
+                error!(error = %e, "consumer listener failed");
+            }
+        });
+    }
 
     // Step 5: Initialize discovery (libp2p swarm)
     let discovery_listen: Multiaddr = "/ip4/0.0.0.0/tcp/0".parse()?;
@@ -1249,114 +1335,81 @@ async fn main() -> Result<()> {
     });
 
     // Step 8: Spawn capability publisher (periodic DHT republish)
-    let identity_clone = identity.clone();
-    let backend_clone2 = backend.clone();
-    let cap_publish_interval = config.capability_publish_interval_secs;
-    let cap_region = config.region.clone();
-    let cap_state = state.clone();
-    tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_secs(cap_publish_interval)).await;
-            // Compute reputation from current quality/trust scores
-            let reputation = {
-                let st = cap_state.read().await;
-                st.metrics_history
-                    .back()
-                    .map(|m| {
-                        // Weighted average: 60% quality + 40% trust
-                        m.quality_score * 0.6 + m.trust_score * 0.4
-                    })
-                    .unwrap_or(0.5)
-            };
-            // Build and store capability descriptor
-            let mut avail = availability.write().await;
-            let cap = avail.build_capability_descriptor(
-                identity_clone.peer_id_str(),
-                identity_clone.public_key_bytes.clone(),
-                &cap_region,
-                reputation,
-                identity_clone.noise_public_key_bytes().to_vec(),
-            );
-            drop(avail);
+    // Only providers advertise capacity — a consumer has nothing to publish.
+    if config.node_mode == "provider" {
+        let identity_clone = identity.clone();
+        let backend_clone2 = backend.clone();
+        let cap_publish_interval = config.capability_publish_interval_secs;
+        let cap_region = config.region.clone();
+        let cap_state = state.clone();
+        tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_secs(cap_publish_interval)).await;
+                // Compute reputation from current quality/trust scores
+                let reputation = {
+                    let st = cap_state.read().await;
+                    st.metrics_history
+                        .back()
+                        .map(|m| {
+                            // Weighted average: 60% quality + 40% trust
+                            m.quality_score * 0.6 + m.trust_score * 0.4
+                        })
+                        .unwrap_or(0.5)
+                };
+                // Build and store capability descriptor
+                let mut avail = availability.write().await;
+                let cap = avail.build_capability_descriptor(
+                    identity_clone.peer_id_str(),
+                    identity_clone.public_key_bytes.clone(),
+                    &cap_region,
+                    reputation,
+                    identity_clone.noise_public_key_bytes().to_vec(),
+                );
+                drop(avail);
 
-            if let Err(e) = backend_clone2.upsert_capability(&cap).await {
-                error!(error = %e, "capability publish failed");
-            } else {
-                debug!("capability descriptor published");
+                if let Err(e) = backend_clone2.upsert_capability(&cap).await {
+                    error!(error = %e, "capability publish failed");
+                } else {
+                    debug!("capability descriptor published");
+                }
             }
-        }
-    });
+        });
+    }
 
     // Step 9: Spawn receipt settlement task
     // The metering engine is kept alive inside TunnelService.
     // Use a separate channel for shutdown signaling.
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut receipt_rx_task = receipt_rx;
-    let receipt_backend = backend.clone();
-    let receipt_signer_key = identity.public_key_bytes.clone();
     let settlement_engine = SettlementEngine::new(
         identity.clone(),
         backend.clone(),
         config.settlement_rate_usd_per_gb,
     );
-    let receipt_settlement = settlement_engine.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                biased;
-                _ = shutdown_rx.changed() => {
-                    // Drain any remaining receipts before shutdown
-                    let mut count = 0u64;
-                    while let Ok(receipt) = receipt_rx_task.try_recv() {
-                        match receipt.verify_signature(&receipt_signer_key) {
-                            Ok(true) => {
-                                if let Err(e) = receipt_backend.insert_receipt(&receipt).await {
-                                    error!(error = %e, "receipt flush failed during shutdown");
-                                } else {
-                                    count += 1;
-                                    if let Err(e) = receipt_settlement.settle_receipt(receipt).await {
-                                        error!(error = %e, "receipt settlement flush failed during shutdown");
-                                    }
-                                }
-                            }
-                            Ok(false) => {
-                                warn!(
-                                    receipt = %receipt.receipt_id,
-                                    session = %receipt.session_id,
-                                    "receipt signature verification failed during shutdown flush, skipping"
-                                );
-                            }
-                            Err(e) => {
-                                warn!(
-                                    receipt = %receipt.receipt_id,
-                                    error = %e,
-                                    "receipt malformed during shutdown flush, skipping"
-                                );
-                            }
-                        }
-                    }
-                    if count > 0 {
-                        info!(count, "receipts flushed during shutdown drain");
-                    }
-                    break;
-                }
-                receipt = receipt_rx_task.recv() => {
-                    match receipt {
-                        Some(receipt) => {
-                            // Verify the receipt signature before persistence
+
+    // Providers alone settle receipts: a consumer never issues authoritative
+    // receipts for traffic it merely forwards, so there is nothing to settle
+    // in consumer mode (and no stray consumer-signed rows to persist).
+    let shutdown_tx = if config.node_mode == "provider" {
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut receipt_rx_task = receipt_rx;
+        let receipt_backend = backend.clone();
+        let receipt_signer_key = identity.public_key_bytes.clone();
+        let receipt_settlement = settlement_engine.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        // Drain any remaining receipts before shutdown
+                        let mut count = 0u64;
+                        while let Ok(receipt) = receipt_rx_task.try_recv() {
                             match receipt.verify_signature(&receipt_signer_key) {
                                 Ok(true) => {
                                     if let Err(e) = receipt_backend.insert_receipt(&receipt).await {
-                                        error!(error = %e, "receipt settlement failed");
+                                        error!(error = %e, "receipt flush failed during shutdown");
                                     } else {
-                                        debug!(
-                                            session = %receipt.session_id,
-                                            seq = receipt.sequence_number,
-                                            "receipt settled"
-                                        );
-                                        // Accumulate the verified receipt toward payout.
+                                        count += 1;
                                         if let Err(e) = receipt_settlement.settle_receipt(receipt).await {
-                                            error!(error = %e, "payout accumulation failed");
+                                            error!(error = %e, "receipt settlement flush failed during shutdown");
                                         }
                                     }
                                 }
@@ -1364,25 +1417,71 @@ async fn main() -> Result<()> {
                                     warn!(
                                         receipt = %receipt.receipt_id,
                                         session = %receipt.session_id,
-                                        seq = receipt.sequence_number,
-                                        "receipt signature verification failed, discarding"
+                                        "receipt signature verification failed during shutdown flush, skipping"
                                     );
                                 }
                                 Err(e) => {
                                     warn!(
                                         receipt = %receipt.receipt_id,
                                         error = %e,
-                                        "receipt malformed, discarding"
+                                        "receipt malformed during shutdown flush, skipping"
                                     );
                                 }
                             }
                         }
-                        None => break,
+                        if count > 0 {
+                            info!(count, "receipts flushed during shutdown drain");
+                        }
+                        break;
+                    }
+                    receipt = receipt_rx_task.recv() => {
+                        match receipt {
+                            Some(receipt) => {
+                                // Verify the receipt signature before persistence
+                                match receipt.verify_signature(&receipt_signer_key) {
+                                    Ok(true) => {
+                                        if let Err(e) = receipt_backend.insert_receipt(&receipt).await {
+                                            error!(error = %e, "receipt settlement failed");
+                                        } else {
+                                            debug!(
+                                                session = %receipt.session_id,
+                                                seq = receipt.sequence_number,
+                                                "receipt settled"
+                                            );
+                                            // Accumulate the verified receipt toward payout.
+                                            if let Err(e) = receipt_settlement.settle_receipt(receipt).await {
+                                                error!(error = %e, "payout accumulation failed");
+                                            }
+                                        }
+                                    }
+                                    Ok(false) => {
+                                        warn!(
+                                            receipt = %receipt.receipt_id,
+                                            session = %receipt.session_id,
+                                            seq = receipt.sequence_number,
+                                            "receipt signature verification failed, discarding"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            receipt = %receipt.receipt_id,
+                                            error = %e,
+                                            "receipt malformed, discarding"
+                                        );
+                                    }
+                                }
+                            }
+                            None => break,
+                        }
                     }
                 }
             }
-        }
-    });
+        });
+
+        Some(shutdown_tx)
+    } else {
+        None
+    };
 
     // Step 10: Set up HTTP API
     // CORS: restrict in production via CORS_ORIGINS env var (comma-separated).
@@ -1450,9 +1549,11 @@ async fn main() -> Result<()> {
         .await?;
 
     // Signal shutdown to receipt settlement task (flush remaining receipts)
-    let _ = shutdown_tx.send(true);
-    // Give the drain a moment to complete
-    sleep(Duration::from_secs(1)).await;
+    if let Some(shutdown_tx) = shutdown_tx {
+        let _ = shutdown_tx.send(true);
+        // Give the drain a moment to complete
+        sleep(Duration::from_secs(1)).await;
+    }
 
     info!("shutdown complete");
     Ok(())
