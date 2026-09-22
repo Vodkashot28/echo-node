@@ -6,6 +6,7 @@ use tracing::{debug, info};
 
 use crate::identity::NodeIdentity;
 use crate::models::StateReceipt;
+use crate::base64_encode;
 
 // ──────────────────────────────────────────────────────────────
 // Token Bucket Rate Limiter
@@ -76,11 +77,24 @@ pub struct MeteringEngine {
     identity: NodeIdentity,
     sessions: Arc<RwLock<HashMap<String, MeteredSession>>>,
     receipt_tx: mpsc::UnboundedSender<StateReceipt>,
+    /// Issue a receipt every N packets (default: 100).
+    receipt_interval_packets: u64,
+    /// Issue a receipt if a single chunk exceeds this many bytes (default: 1MB).
+    receipt_min_bytes: u64,
 }
 
 impl MeteringEngine {
     pub fn new(
         identity: NodeIdentity,
+    ) -> (Self, mpsc::UnboundedReceiver<StateReceipt>) {
+        Self::with_config(identity, 100, 1_000_000)
+    }
+
+    /// Create a metering engine with custom receipt issuance thresholds.
+    pub fn with_config(
+        identity: NodeIdentity,
+        receipt_interval_packets: u64,
+        receipt_min_bytes: u64,
     ) -> (Self, mpsc::UnboundedReceiver<StateReceipt>) {
         let (receipt_tx, receipt_rx) = mpsc::unbounded_channel();
         (
@@ -88,6 +102,8 @@ impl MeteringEngine {
                 identity,
                 sessions: Arc::new(RwLock::new(HashMap::new())),
                 receipt_tx,
+                receipt_interval_packets: receipt_interval_packets.max(1),
+                receipt_min_bytes,
             },
             receipt_rx,
         )
@@ -132,7 +148,9 @@ impl MeteringEngine {
         session.sequence_counter += 1;
 
         // Issue receipt at configured intervals
-        if session.sequence_counter % 100 == 0 || bytes > 1_000_000 {
+        if session.sequence_counter % self.receipt_interval_packets == 0
+            || bytes > self.receipt_min_bytes
+        {
             let receipt = self.create_receipt(session).await?;
             session.receipts_issued += 1;
             let _ = self.receipt_tx.send(receipt);
@@ -207,35 +225,10 @@ impl MeteringEngine {
 
 }
 
-// Simple base64 helpers (avoids adding another dependency)
-fn base64_encode(bytes: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(CHARS[(triple & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
-}
-
 // ──────────────────────────────────────────────────────────────
 // Wire format: ed25519 signatures are 64 bytes = 86 chars base64.
-// base64_encode is used by create_receipt(); base64_decode was only
-// used by the now-removed verify_receipt(), so it is deleted.
+// base64_encode is used by create_receipt(); base64_decode is
+// defined in lib.rs as a shared utility.
 // ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -319,5 +312,44 @@ mod tests {
                 c
             );
         }
+    }
+
+    #[test]
+    fn receipt_sign_and_verify_roundtrip() {
+        use ed25519_dalek::{SigningKey, Signer};
+        use rand::rngs::OsRng;
+
+        // Generate a real keypair
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        // Build a receipt
+        let mut receipt = crate::StateReceipt {
+            receipt_id: "test-receipt-1".to_string(),
+            session_id: "session-abc".to_string(),
+            signer_peer_id: "peer_local".to_string(),
+            counterparty_peer_id: "peer_remote".to_string(),
+            bytes_transferred: 5000,
+            direction: "bidirectional".to_string(),
+            sequence_number: 42,
+            timestamp_secs: 1700000000,
+            signature: String::new(),
+        };
+
+        // Sign the receipt (same logic as MeteringEngine::create_receipt)
+        let msg = receipt.signed_message().into_bytes();
+        let sig = signing_key.sign(&msg);
+        receipt.signature = base64_encode(&sig.to_bytes());
+
+        // Verify should succeed with the correct public key
+        let result = receipt.verify_signature(&verifying_key.to_bytes());
+        assert!(result.is_ok(), "verify returned error: {:?}", result.err());
+        assert!(result.unwrap(), "signature verification failed");
+
+        // Verify should fail with a different public key
+        let other_key = SigningKey::generate(&mut OsRng).verifying_key();
+        let result = receipt.verify_signature(&other_key.to_bytes());
+        assert!(result.is_ok());
+        assert!(!result.unwrap(), "verification should have failed with wrong key");
     }
 }

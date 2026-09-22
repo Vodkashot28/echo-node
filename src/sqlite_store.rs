@@ -1,3 +1,4 @@
+use crate::migrator;
 use crate::models::*;
 use crate::MetricsBackend;
 use anyhow::{Context, Result};
@@ -11,141 +12,6 @@ use std::time::Duration;
 pub struct SqliteStore {
     pool: SqlitePool,
 }
-
-const SCHEMA: &[&str] = &[
-    r#"CREATE TABLE IF NOT EXISTS nodes (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        peer_id TEXT,
-        public_key TEXT,
-        ip_address TEXT,
-        region TEXT,
-        status TEXT NOT NULL DEFAULT 'offline',
-        last_seen_at TEXT,
-        uptime REAL NOT NULL DEFAULT 0,
-        latency REAL NOT NULL DEFAULT 0,
-        bandwidth_used REAL NOT NULL DEFAULT 0,
-        quality_score REAL NOT NULL DEFAULT 0,
-        trust_score REAL DEFAULT 0,
-        earnings REAL NOT NULL DEFAULT 0,
-        packet_loss REAL NOT NULL DEFAULT 0,
-        last_updated TEXT,
-        last_ip TEXT,
-        metadata TEXT DEFAULT '{}',
-        services TEXT NOT NULL DEFAULT '{}',
-        uptime_pct REAL DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
-        bandwidth_down_mbps REAL DEFAULT 0,
-        bandwidth_up_mbps REAL DEFAULT 0,
-        packet_loss_pct REAL DEFAULT 0,
-        sessions_count INTEGER DEFAULT 0,
-        earnings_usd REAL DEFAULT 0,
-        reported_upload_cap_mbps REAL DEFAULT 0,
-        reported_download_cap_mbps REAL DEFAULT 0,
-        supported_encryption TEXT DEFAULT 'noise-xx',
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS node_metrics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        node_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        latency_ms REAL DEFAULT 0,
-        bandwidth_down_mbps REAL DEFAULT 0,
-        bandwidth_up_mbps REAL DEFAULT 0,
-        packet_loss_pct REAL DEFAULT 0,
-        quality_score REAL DEFAULT 0,
-        earnings_usd REAL DEFAULT 0,
-        recorded_at TEXT DEFAULT (datetime('now'))
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS network_metrics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        active_nodes INTEGER DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
-        bandwidth_egress_mb REAL DEFAULT 0,
-        bandwidth_ingress_mb REAL DEFAULT 0,
-        packet_loss_pct REAL DEFAULT 0,
-        uptime_pct REAL DEFAULT 0,
-        earnings_usd REAL DEFAULT 0,
-        recorded_at TEXT DEFAULT (datetime('now'))
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS node_intelligence (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        node_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        quality_score REAL DEFAULT 0,
-        trust_score REAL DEFAULT 0,
-        anomaly_score REAL DEFAULT 0,
-        is_anomalous INTEGER DEFAULT 0,
-        cluster_id INTEGER DEFAULT 0,
-        feature_vector TEXT,
-        recorded_at TEXT DEFAULT (datetime('now'))
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS peer_reputation (
-        peer_id TEXT PRIMARY KEY,
-        reputation_score REAL DEFAULT 0.5,
-        total_bytes_relayed INTEGER DEFAULT 0,
-        successful_sessions INTEGER DEFAULT 0,
-        failed_sessions INTEGER DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
-        last_active_at TEXT,
-        recorded_at TEXT DEFAULT (datetime('now'))
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS connection_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        local_peer_id TEXT NOT NULL,
-        remote_peer_id TEXT NOT NULL,
-        remote_ip TEXT,
-        remote_port INTEGER,
-        direction TEXT NOT NULL,
-        bytes_sent INTEGER DEFAULT 0,
-        bytes_received INTEGER DEFAULT 0,
-        duration_secs REAL DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
-        exit_reason TEXT,
-        started_at TEXT DEFAULT (datetime('now')),
-        ended_at TEXT
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS state_receipts (
-        receipt_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        signer_peer_id TEXT NOT NULL,
-        counterparty_peer_id TEXT NOT NULL,
-        bytes_transferred INTEGER DEFAULT 0,
-        direction TEXT NOT NULL,
-        sequence_number INTEGER DEFAULT 0,
-        timestamp_secs INTEGER DEFAULT 0,
-        signature TEXT NOT NULL
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS capability_descriptors (
-        peer_id TEXT PRIMARY KEY,
-        public_key BLOB NOT NULL,
-        region TEXT NOT NULL,
-        upload_cap_mbps REAL DEFAULT 0,
-        download_cap_mbps REAL DEFAULT 0,
-        avg_latency_ms REAL DEFAULT 0,
-        reputation_score REAL DEFAULT 0.5,
-        supported_encryption TEXT DEFAULT '["noise-xx"]',
-        max_sessions INTEGER DEFAULT 1,
-        active_sessions INTEGER DEFAULT 0,
-        last_updated INTEGER DEFAULT 0,
-        noise_public_key BLOB DEFAULT X'00'
-    )"#,
-    "CREATE INDEX IF NOT EXISTS idx_conn_history_local ON connection_history(local_peer_id)",
-    "CREATE INDEX IF NOT EXISTS idx_conn_history_remote ON connection_history(remote_peer_id)",
-    "CREATE INDEX IF NOT EXISTS idx_receipts_session ON state_receipts(session_id)",
-    "CREATE INDEX IF NOT EXISTS idx_caps_region ON capability_descriptors(region)",
-];
-
-/// Inline migrations: each entry is a single, complete SQL statement.
-/// Using a slice avoids split-on-semicolon fragility with literals.
-const MIGRATIONS: &[&str] = &[
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS uptime REAL DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS services TEXT NOT NULL DEFAULT '{}'",
-    "ALTER TABLE capability_descriptors ADD COLUMN IF NOT EXISTS noise_public_key BLOB DEFAULT X'00'",
-];
 
 impl SqliteStore {
     pub async fn new(db_path: &str) -> Result<Self> {
@@ -176,19 +42,15 @@ impl SqliteStore {
             .await
             .context("sqlite set synchronous")?;
 
-        for &sql in SCHEMA {
-            sqlx::query(sql)
-                .execute(&pool)
-                .await
-                .context("failed to create schema")?;
-        }
-
-        // Each migration is idempotent (IF NOT EXISTS guards).
-        for &sql in MIGRATIONS {
-            let _ = sqlx::query(sql).execute(&pool).await;
-        }
+        let migrations = migrator::sqlite_migrations();
+        migrator::run_sqlite(&pool, &migrations).await?;
 
         Ok(Self { pool })
+    }
+
+    /// Access the underlying pool (useful for testing).
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     pub async fn upsert_node(&self, row: &NodeRow) -> Result<()> {
@@ -198,18 +60,19 @@ impl SqliteStore {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "{}".to_string());
         sqlx::query(
-            r#"INSERT INTO nodes (id, name, user_id, peer_id, public_key, region, status,
+            r#"INSERT INTO nodes (id, name, user_id, peer_id, public_key, ip_address, region, status,
                 uptime, latency, bandwidth_used, quality_score, earnings, packet_loss,
                 trust_score, reported_upload_cap_mbps, reported_download_cap_mbps,
                 last_seen_at, uptime_pct, avg_latency_ms, bandwidth_down_mbps,
                 bandwidth_up_mbps, packet_loss_pct, sessions_count, earnings_usd,
                 supported_encryption, services)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 user_id = excluded.user_id,
                 peer_id = excluded.peer_id,
                 public_key = excluded.public_key,
+                ip_address = excluded.ip_address,
                 region = excluded.region,
                 status = excluded.status,
                 uptime = excluded.uptime,
@@ -238,6 +101,7 @@ impl SqliteStore {
         .bind(&row.user_id)
         .bind(&row.peer_id)
         .bind(&row.public_key)
+        .bind(&row.ip_address)
         .bind(&row.region)
         .bind(&row.status)
         .bind(row.uptime)
@@ -381,6 +245,7 @@ impl MetricsBackend for SqliteStore {
                 successful_sessions, failed_sessions, avg_latency_ms, last_active_at, recorded_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(peer_id) DO UPDATE SET
+                reputation_score = excluded.reputation_score,
                 total_bytes_relayed = peer_reputation.total_bytes_relayed + excluded.total_bytes_relayed,
                 successful_sessions = peer_reputation.successful_sessions + excluded.successful_sessions,
                 failed_sessions = peer_reputation.failed_sessions + excluded.failed_sessions,
@@ -609,5 +474,65 @@ impl MetricsBackend for SqliteStore {
                 noise_public_key: r.11,
             })
             .collect())
+    }
+
+    async fn record_settlement(&self, record: &SettlementRecord) -> Result<bool> {
+        // Idempotent per-receipt: returns `false` when the receipt was
+        // already settled (INSERT OR IGNORE skips the duplicate).
+        let res = sqlx::query(
+            r#"INSERT OR IGNORE INTO settlements
+                (receipt_id, signer_peer_id, counterparty_peer_id, bytes_settled, earnings_usd, settled_at)
+               VALUES (?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(&record.receipt_id)
+        .bind(&record.signer_peer_id)
+        .bind(&record.counterparty_peer_id)
+        .bind(record.bytes_settled as i64)
+        .bind(record.earnings_usd)
+        .bind(&record.settled_at)
+        .execute(&self.pool)
+        .await
+        .context("sqlite record settlement")?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn get_settlements(&self, limit: i64) -> Result<Vec<SettlementRecord>> {
+        let rows: Vec<(String, String, String, i64, f64, String)> = sqlx::query_as(
+            "SELECT receipt_id, signer_peer_id, counterparty_peer_id,
+                    bytes_settled, earnings_usd, settled_at
+             FROM settlements
+             ORDER BY settled_at DESC
+             LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("sqlite get settlements")?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SettlementRecord {
+                receipt_id: r.0,
+                signer_peer_id: r.1,
+                counterparty_peer_id: r.2,
+                bytes_settled: r.3 as u64,
+                earnings_usd: r.4,
+                settled_at: r.5,
+            })
+            .collect())
+    }
+
+    async fn settlement_summary(&self) -> Result<SettlementSummary> {
+        let row: (i64, Option<i64>, Option<f64>) = sqlx::query_as(
+            "SELECT COUNT(*), COALESCE(SUM(bytes_settled), 0), COALESCE(SUM(earnings_usd), 0.0)
+             FROM settlements",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("sqlite settlement summary")?;
+        Ok(SettlementSummary {
+            receipts_settled: row.0 as u64,
+            total_bytes_settled: row.1.unwrap_or(0) as u64,
+            total_earnings_usd: row.2.unwrap_or(0.0),
+        })
     }
 }

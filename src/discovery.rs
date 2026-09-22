@@ -49,7 +49,7 @@ impl DiscoveryService {
                 let peer_id = key.public().to_peer_id();
 
                 let identify = identify::Behaviour::new(identify::Config::new(
-                    "echo-dht/0.3.0".into(),
+                    format!("echo-dht/{}", env!("CARGO_PKG_VERSION")),
                     key.public().clone(),
                 ));
 
@@ -78,8 +78,10 @@ impl DiscoveryService {
 
         // If no custom bootstrap peers were provided, use the well-known
         // public libp2p bootstrap nodes so the DHT can discover other peers.
+        // Uses both DNS and IP addresses for resilience against DNS failures.
         if bootstrap_peers.is_empty() {
             let default_bootstrap: Vec<(&str, &str)> = vec![
+                // DNS bootstrap nodes (require DNS resolution)
                 (
                     "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFRms7qZKnPvx22x76D2GAy4g2txL15XM1",
                     "QmNnooDu7bfjPFRms7qZKnPvx22x76D2GAy4g2txL15XM1",
@@ -96,6 +98,23 @@ impl DiscoveryService {
                     "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
                     "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
                 ),
+                // IP fallback nodes (bypass DNS resolution)
+                (
+                    "/ip4/147.75.83.83/tcp/4001/p2p/QmNnooDu7bfjPFRms7qZKnPvx22x76D2GAy4g2txL15XM1",
+                    "QmNnooDu7bfjPFRms7qZKnPvx22x76D2GAy4g2txL15XM1",
+                ),
+                (
+                    "/ip4/147.75.83.83/tcp/4001/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJyTQqNwdT3JZKRoMuBFxx",
+                    "QmQCU2EcMqAqQPR2i9bChDtGNJyTQqNwdT3JZKRoMuBFxx",
+                ),
+                (
+                    "/ip4/147.75.83.83/tcp/4001/p2p/QmbLHAnMoJPWcr5ChtFU62SAxpbY8WpYXMYZ3kCEb9EsqZ",
+                    "QmbLHAnMoJPWcr5ChtFU62SAxpbY8WpYXMYZ3kCEb9EsqZ",
+                ),
+                (
+                    "/ip4/147.75.83.83/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+                    "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+                ),
             ];
 
             for (addr_str, peer_id_str) in default_bootstrap {
@@ -107,11 +126,11 @@ impl DiscoveryService {
                         .behaviour_mut()
                         .kademlia
                         .add_address(&peer_id, addr);
-                    debug!(peer_id = %peer_id, "default bootstrap peer added");
+                    debug!(peer_id = %peer_id, addr = %addr_str, "default bootstrap peer added");
                 }
             }
 
-            info!("bootstrapping DHT with default public nodes");
+            info!("bootstrapping DHT with default public nodes (DNS + IP fallbacks)");
         }
 
         // Trigger DHT bootstrap
@@ -155,13 +174,11 @@ impl DiscoveryService {
                                     kad::GetProvidersOk::FoundProviders { providers, .. },
                                 )) => {
                                     debug!(providers_count = providers.len(), "providers found");
+                                    // The swarm's peer store (populated via identify protocol)
+                                    // will resolve addresses when a connection is initiated.
+                                    // Pass Multiaddr::empty here; the event handler in main.rs
+                                    // logs the discovery for visibility.
                                     for provider in &providers {
-                                        // Note: libp2p-kad 0.46 does not expose
-                                        // `addresses_of_peer` on the Behaviour struct.
-                                        // The address is empty here; actual connectivity
-                                        // is resolved through the identify protocol and
-                                        // the swarm's peer store when a connection is
-                                        // initiated.  This event is informational only.
                                         let _ = self.event_tx.send(DiscoveryEvent::PeerFound(
                                             *provider,
                                             Multiaddr::empty(),

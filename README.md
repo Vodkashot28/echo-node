@@ -18,7 +18,7 @@ graph TB
         end
 
         subgraph "Storage Layer"
-            MODELS[models.rs<br/>9 Data Models]
+            MODELS[models.rs<br/>10 Data Models]
             NEON[neon.rs<br/>PostgreSQL Backend]
             SQLITE[sqlite_store.rs<br/>SQLite Backend]
         end
@@ -286,27 +286,44 @@ erDiagram
         bytea noise_public_key
     }
 
+    SETTLEMENTS {
+        text receipt_id PK
+        text signer_peer_id FK NOT_NULL
+        text counterparty_peer_id FK NOT_NULL
+        bigint bytes_settled NOT_NULL
+        double precision earnings_usd NOT_NULL
+        text settled_at NOT_NULL
+        index idx_settlements_counterparty
+    }
+
     NODES ||--o| PEER_REPUTATION : "peer_id"
     NODES ||--o{ CONNECTION_HISTORY : "local_peer_id"
     NODES ||--o{ STATE_RECEIPTS : "signer_peer_id"
     NODES ||--o| CAPABILITY_DESCRIPTORS : "peer_id"
+    STATE_RECEIPTS ||--o| SETTLEMENTS : "receipt_id"
 ```
+
+Schema is created and upgraded by versioned SQL migrations (`migrations/{postgres,sqlite}/*.sql`), applied in order by `migrator.rs` and tracked in a `schema_migrations` table.
 
 ## Module Structure
 
 ```
 src/
-├── lib.rs              # MetricsBackend trait (13 methods) + re-exports
-├── main.rs             # Heartbeat, REST API, 8 background tasks (1159 lines)
-├── models.rs           # 9 data models (NodeRow, PeerReputation, etc.)
+├── lib.rs              # MetricsBackend trait (16 methods) + shared base64 utils
+├── main.rs             # Heartbeat, REST API, 8 background tasks (1548 lines)
+├── models.rs           # 10 data models (NodeRow, PeerReputation, SettlementRecord, etc.)
 ├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, file permissions
 ├── discovery.rs        # libp2p Kademlia DHT swarm, provider discovery
-├── tunnel.rs           # Noise_XX handshake, bidirectional relay, backpressure (795 lines)
+├── tunnel.rs           # Noise_XX handshake, bidirectional relay, backpressure (857 lines)
 ├── meter.rs            # Token bucket, signed receipts, session metering
 ├── availability.rs     # Capacity engine, session management
-├── neon.rs             # PostgreSQL backend (inline DDL + migrations)
-└── sqlite_store.rs     # SQLite backend (inline DDL + migrations)
+├── migrator.rs         # Versioned SQL migrations: splitter, apply, schema_migrations
+├── neon.rs             # PostgreSQL backend (runs migrations/postgres/*.sql)
+├── settlement.rs       # Payout engine: receipts → idempotent settlement rows (bytes + USD)
+└── sqlite_store.rs     # SQLite backend (runs migrations/sqlite/*.sql)
 ```
+
+Migrations are versioned SQL files embedded at compile time from `migrations/{postgres,sqlite}/`, applied in order with `schema_migrations` tracking:
 
 ## Quick Start
 
@@ -331,6 +348,7 @@ cargo run --release
 | GET | `/health` | None | Health check (healthy/degraded/unhealthy) |
 | POST | `/match` | None | Query providers by region + min bandwidth |
 | POST | `/control` | Bearer | Start/stop/restart daemon |
+| GET | `/settlements` | Bearer | Payout totals + settled receipts |
 
 ### Response Examples
 
@@ -373,9 +391,10 @@ cargo run --release
 | `MAX_DOWNLOAD_MBPS` | `100.0` | Physical downlink capacity (Mbps) |
 | `MAX_SESSIONS` | `10` | Max concurrent tunnel sessions |
 | `IDENTITY_PATH` | `data/identity.json` | Persistent node identity file |
-| `API_KEY` | (unset) | API key for `/control` endpoint (Bearer auth) |
+| `API_KEY` | (unset) | API key for `/control` + `/settlements` endpoints (Bearer auth) |
 | `RELAY_TARGET` | `127.0.0.1:80` | Target address for incoming tunnel relay |
 | `TUNNEL_ADDR` | `0.0.0.0:3002` | Tunnel listener bind address |
+| `SETTLEMENT_RATE_USD_PER_GB` | `0.50` | USD payout per GB relayed (accumulated on verified receipts) |
 | `RUST_LOG` | `echo_daemon=info` | Log level filter |
 
 ## Dependencies
@@ -409,7 +428,7 @@ The daemon spawns 8 concurrent background tasks on startup:
 | 5 | **Heartbeat** | 1015 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
 | 6 | **Metric Cleanup** | 1021 | Removes metrics older than 30 days (daily) |
 | 7 | **Capability Publisher** | 1040 | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
-| 8 | **Receipt Settlement** | 1068 | Persists signed receipts from metering channel to DB (event-driven, shutdown-aware) |
+| 8 | **Receipt Settlement** | 1068 | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
 
 Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1148).
 
@@ -421,7 +440,7 @@ Additionally, the REST API (axum) and graceful shutdown are combined in a single
 | **snow over libp2p noise** | Explicit control over handshake, prologue binding, key pinning |
 | **Semaphore for connections** | RAII permits prevent slot leaks on panic/early drop |
 | **Dual DB backends** | SQLite for local dev, PostgreSQL for production |
-| **Inline DDL** | No migration tool dependency; schema evolves with code |
+| **Versioned SQL migrations** | `migrator.rs` applies embedded `migrations/{postgres,sqlite}/*.sql` in order, tracked in `schema_migrations`; per-file transactions with retry-on-failure |
 | **Constant-time API key** | Prevents timing attacks on the Bearer token |
 | **Token bucket backpressure** | Sleep-based backpressure is simpler than channel-based flow control |
 | **PeerId-based reputation** | Stable identity across sessions (vs. SocketAddr which changes) |

@@ -280,7 +280,7 @@ impl TunnelService {
         // Token bucket: use configured max upload bandwidth for rate limiting
         let mut bucket = TokenBucket::new(self.relay_config.max_upload_mbps, self.relay_config.max_upload_mbps);
 
-        let (bytes_sent, bytes_received) = Self::encrypted_relay_with_metering(
+        let (bytes_sent, bytes_received, _avg_latency_ms) = Self::encrypted_relay_with_metering(
             tokio::io::split(session.stream),
             target_stream,
             session.transport.clone(),
@@ -493,7 +493,7 @@ impl TunnelService {
         let transport = Arc::new(tokio::sync::Mutex::new(transport));
 
         // 7. Bidirectional encrypted relay with metering
-        let (bytes_sent, bytes_received) = Self::encrypted_relay_with_metering(
+        let (bytes_sent, bytes_received, avg_latency_ms) = Self::encrypted_relay_with_metering(
             tokio::io::split(stream),
             target_stream,
             transport,
@@ -520,7 +520,7 @@ impl TunnelService {
                 bytes_sent,
                 bytes_received,
                 duration,
-                0.0, // avg_latency_ms (not measured for individual connections)
+                avg_latency_ms, // measured per-connection noise processing latency
                 "completed",
             )
             .await
@@ -529,9 +529,32 @@ impl TunnelService {
         }
 
         // Update peer reputation using peer_id (not socket addr)
+        // Compute a real reputation score based on session metrics:
+        //   - Base score from exit reason (completed vs error)
+        //   - Bonus for meaningful duration (>10s)
+        //   - Bonus for throughput (bytes/second normalized)
+        //   - Penalty for very short sessions (<1s, likely failed)
+        let base_score = if bytes_sent + bytes_received > 0 { 0.6 } else { 0.2 };
+        let duration_bonus = if duration > 10.0 {
+            0.2
+        } else if duration > 1.0 {
+            0.1
+        } else {
+            0.0
+        };
+        let total_bytes = bytes_sent + bytes_received;
+        let throughput_bonus = if duration > 0.0 {
+            let bytes_per_sec = total_bytes as f64 / duration;
+            // Normalize: 1 MB/s = +0.2, capped at 0.2
+            ((bytes_per_sec / 1_000_000.0) * 0.2).min(0.2)
+        } else {
+            0.0
+        };
+        let reputation_score = (base_score + duration_bonus + throughput_bonus).min(1.0);
+
         let reputation = PeerReputation {
             peer_id: remote_peer_id_str,
-            reputation_score: 1.0,
+            reputation_score,
             total_bytes_relayed: bytes_sent + bytes_received,
             successful_sessions: 1,
             failed_sessions: 0,
@@ -577,6 +600,8 @@ impl TunnelService {
     /// metering engine.
     ///
     /// Uses `Arc<Mutex<TransportState>>` for concurrent encrypt/decrypt.
+    /// Returns (bytes_sent, bytes_received, avg_latency_ms) where
+    /// avg_latency_ms measures the mean Noise encrypt/decrypt processing time.
     async fn encrypted_relay_with_metering(
         tunnel_stream: (tokio::io::ReadHalf<TcpStream>, tokio::io::WriteHalf<TcpStream>),
         target_stream: TcpStream,
@@ -584,7 +609,7 @@ impl TunnelService {
         session_id: &str,
         metering: &MeteringEngine,
         bucket: &mut TokenBucket,
-    ) -> (u64, u64) {
+    ) -> (u64, u64, f64) {
         use tokio::io::split;
 
         let (mut tunnel_read, mut tunnel_write) = tunnel_stream;
@@ -593,10 +618,15 @@ impl TunnelService {
         let mut bytes_sent: u64 = 0;
         let mut bytes_received: u64 = 0;
 
+        // Shared latency tracking across both relay directions.
+        // Mutex is fine here since contention is minimal (one lock per chunk).
+        let latency_state = Arc::new(tokio::sync::Mutex::new((0.0f64, 0u64)));
+
         // Consumer → Target (egress): decrypt from tunnel, forward to target
         let transport_egress = transport.clone();
         let metering_egress = metering.clone();
         let sid_e = session_id.to_string();
+        let latency_egress = latency_state.clone();
         let to_target = async {
             let mut raw_buf = [0u8; NOISE_MAX_MSG_LEN];
             let mut plain_buf = [0u8; NOISE_MAX_MSG_LEN];
@@ -628,8 +658,16 @@ impl TunnelService {
 
                 // Decrypt
                 let plain_len = {
+                    let t_before = std::time::Instant::now();
                     let mut transport = transport_egress.lock().await;
-                    match transport.read_message(&raw_buf[..n], &mut plain_buf) {
+                    let result = transport.read_message(&raw_buf[..n], &mut plain_buf);
+                    let decrypt_ms = t_before.elapsed().as_secs_f64() * 1000.0;
+                    {
+                        let mut ls = latency_egress.lock().await;
+                        ls.0 += decrypt_ms;
+                        ls.1 += 1;
+                    }
+                    match result {
                         Ok(len) => len,
                         Err(e) => {
                             warn!(session = %sid_e, error = %e, "noise decrypt failed");
@@ -653,6 +691,7 @@ impl TunnelService {
         let transport_ingress = transport.clone();
         let metering_ingress = metering.clone();
         let sid_i = session_id.to_string();
+        let latency_ingress = latency_state.clone();
         let to_tunnel = async {
             let mut plain_buf = [0u8; NOISE_MAX_MSG_LEN];
             let mut enc_buf = [0u8; NOISE_MAX_MSG_LEN];
@@ -666,8 +705,16 @@ impl TunnelService {
 
                 // Encrypt
                 let enc_len = {
+                    let t_before = std::time::Instant::now();
                     let mut transport = transport_ingress.lock().await;
-                    match transport.write_message(&plain_buf[..n], &mut enc_buf) {
+                    let result = transport.write_message(&plain_buf[..n], &mut enc_buf);
+                    let encrypt_ms = t_before.elapsed().as_secs_f64() * 1000.0;
+                    {
+                        let mut ls = latency_ingress.lock().await;
+                        ls.0 += encrypt_ms;
+                        ls.1 += 1;
+                    }
+                    match result {
                         Ok(len) => len,
                         Err(e) => {
                             warn!(session = %sid_i, error = %e, "noise encrypt failed");
@@ -692,7 +739,17 @@ impl TunnelService {
             _ = to_tunnel => {}
         }
 
-        (bytes_sent, bytes_received)
+        let (lat_sum, lat_count) = {
+            let ls = latency_state.lock().await;
+            *ls
+        };
+        let avg_latency_ms = if lat_count > 0 {
+            (lat_sum / lat_count as f64 * 100.0).round() / 100.0
+        } else {
+            0.0
+        };
+
+        (bytes_sent, bytes_received, avg_latency_ms)
     }
 }
 

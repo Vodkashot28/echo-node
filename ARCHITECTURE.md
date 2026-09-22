@@ -15,32 +15,37 @@ Detailed architectural analysis of the Echo Node daemon. For the high-level over
 
 ## Component Inventory
 
-### `lib.rs` — Crate Root (49 lines)
+### `lib.rs` — Crate Root (121 lines)
 
-Declares 8 modules and defines the `MetricsBackend` async trait with 13 methods.
+Declares 10 modules plus shared base64 utilities and defines the `MetricsBackend` async trait with 16 methods.
 
 ```
-pub mod { availability, discovery, identity, meter, models, neon, sqlite_store, tunnel }
+pub mod { availability, discovery, identity, meter, migrator, models, neon, settlement, sqlite_store, tunnel }
 pub use models::*          // blanket re-export of all data models
 pub use neon::NeonStore    // PostgreSQL backend
 pub use sqlite_store::SqliteStore  // SQLite backend
 ```
+
+**Shared utilities:**
+- `base64_encode` / `base64_decode` — hand-rolled (avoids another dependency), used by receipt signing and backends
+- `NOISE_PARAMS` — `"Noise_XX_25519_ChaChaPoly_BLAKE2s"` shared by identity and tunnel
 
 **`MetricsBackend` trait** — the storage abstraction layer:
 - `upsert_node` / `insert_node_metrics` / `insert_network_metrics` / `insert_node_intelligence`
 - `cleanup_old_metrics` — purges data older than N days
 - `upsert_peer_reputation` / `get_peer_reputation` — accumulative reputation
 - `insert_connection` / `update_connection_end` — connection lifecycle
-- `insert_receipt` / `get_receipts_for_session` — receipt settlement
+- `insert_receipt` / `get_receipts_for_session` — metering receipt persistence
+- `record_settlement` / `get_settlements` / `settlement_summary` — payout accumulation
 - `upsert_capability` / `get_capabilities_in_region` — DHT discovery support
 
 Both `NeonStore` and `SqliteStore` implement this trait, allowing the daemon to switch backends at startup based on the `DATABASE_URL` env var.
 
 ---
 
-### `models.rs` — Data Models (161 lines)
+### `models.rs` — Data Models (341 lines)
 
-All 9 structs derive `Debug, Clone, Serialize, Deserialize`. They fall into three categories:
+All 10 structs derive `Debug, Clone, Serialize, Deserialize`. They fall into three categories:
 
 **Legacy models** (original EchoMesh schema):
 | Struct | Purpose | Fields |
@@ -56,6 +61,8 @@ All 9 structs derive `Debug, Clone, Serialize, Deserialize`. They fall into thre
 | `PeerReputation` | Accumulative reputation tracking | peer_id, reputation_score, total_bytes_relayed, successful/failed_sessions, avg_latency_ms |
 | `ConnectionHistory` | Per-session connection record | local/remote_peer_id, remote_ip/port, direction, bytes_sent/received, duration, exit_reason |
 | `StateReceipt` | Signed cryptographic receipt | receipt_id, session_id, signer/counterparty_peer_id, bytes_transferred, signature |
+| `SettlementRecord` | Per-receipt payout entry | receipt_id (PK), signer/counterparty_peer_id, bytes_settled, earnings_usd, settled_at |
+| `SettlementSummary` | Aggregated payout totals | receipts_settled, total_bytes_settled, total_earnings_usd |
 | `CapabilityDescriptor` | DHT-published capacity info | peer_id, public_key, region, upload/download_cap_mbps, noise_public_key, max/active_sessions |
 | `SystemStats` | Snapshot of system metrics | cpu_pct, memory_pct, disk_usage_pct, active_sessions, current_usage_rx/tx_mbps |
 
@@ -84,7 +91,7 @@ pub struct NodeIdentity {
 
 ---
 
-### `discovery.rs` — DHT Peer Discovery (197 lines)
+### `discovery.rs` — DHT Peer Discovery (214 lines)
 
 Wraps a libp2p swarm with Kademlia + Identify protocols.
 
@@ -122,7 +129,7 @@ pub enum DiscoveryEvent {
 
 ---
 
-### `tunnel.rs` — Noise_XX Encrypted Tunnel (795 lines)
+### `tunnel.rs` — Noise_XX Encrypted Tunnel (857 lines)
 
 The largest and most complex module. Handles the full tunnel lifecycle: pre-handshake exchange, Noise_XX handshake, bidirectional encrypted relay, and session teardown.
 
@@ -163,7 +170,7 @@ pub enum TunnelEvent {
 
 ---
 
-### `meter.rs` — Token Bucket + Signed Receipts (240 lines)
+### `meter.rs` — Token Bucket + Signed Receipts (355 lines)
 
 **Token Bucket** — per-session rate limiter:
 
@@ -197,7 +204,28 @@ pub struct MeteringEngine {
 
 ---
 
-### `availability.rs` — Capacity Engine (224 lines)
+### `settlement.rs` — Payout Engine (118 lines)
+
+Turns signed, verified receipts into idempotent payout accumulation.
+
+```rust
+pub struct SettlementEngine {
+    identity: NodeIdentity,              // local node — verifies receipt signatures
+    backend: Arc<dyn MetricsBackend>,    // writes to `settlements` table
+    usd_per_gb: f64,                     // conversion rate (SETTLEMENT_RATE_USD_PER_GB)
+}
+```
+
+**Behavior:**
+- `settle_receipt(receipt)` — rejects receipts not signed by this node; verifies the ed25519 signature; computes `earnings = bytes / 1e9 * usd_per_gb`; persists a `SettlementRecord` keyed by `receipt_id`.
+- **Idempotency:** backends return whether a row was actually inserted (`INSERT OR IGNORE` / `ON CONFLICT DO NOTHING`). Replaying an already-settled receipt is a no-op — double-counting is structurally impossible.
+- `settlements(limit)` / `summary()` — expose recent entries and aggregate totals for the `GET /settlements` endpoint.
+
+**Wiring (main.rs Step 9):** after a receipt passes signature verification and is persisted via `insert_receipt`, the same task feeds it to `settlement_engine.settle_receipt()`, including the shutdown drain path.
+
+---
+
+### `availability.rs` — Capacity Engine (266 lines)
 
 Computes how much bandwidth to advertise to the DHT based on current system load.
 
@@ -225,11 +253,11 @@ pub struct AvailabilityEngine {
 
 ---
 
-### `neon.rs` — PostgreSQL Backend (629 lines)
+### `neon.rs` — PostgreSQL Backend (487 lines)
 
 Neon PostgreSQL implementation of `MetricsBackend`.
 
-**Schema management:** Inline DDL (`SCHEMA` constant, 8 tables + 4 indexes) run on startup. Additional `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migrations for backward compatibility.
+**Schema management:** Versioned SQL migrations from `migrations/postgres/*.sql`, applied by `migrator.rs` on startup inside per-file transactions and tracked in `schema_migrations`. Postgres migration SQL is strict (any failure aborts the run, so the migration is retried on the next boot).
 
 **Connection:** `PgPool` with `max_connections(5)`, uses `$1, $2, ...` bind parameter syntax.
 
@@ -241,11 +269,11 @@ Neon PostgreSQL implementation of `MetricsBackend`.
 
 ---
 
-### `sqlite_store.rs` — SQLite Backend (595 lines)
+### `sqlite_store.rs` — SQLite Backend (478 lines)
 
 SQLite implementation of `MetricsBackend`.
 
-**Schema management:** Same inline DDL pattern as Neon, but with SQLite-specific syntax (`?` bind parameters, `AUTOINCREMENT`, `INTEGER` for booleans).
+**Schema management:** Versioned SQL migrations from `migrations/sqlite/*.sql`, applied by `migrator.rs` on startup inside per-file transactions and tracked in `schema_migrations`. SQLite is strict except for SQLite's `duplicate column name` error class (legacy idempotent column backfills — see `migrator.rs`).
 
 **Connection:** `SqlitePool` with `max_connections(1)` (single writer), `create_if_missing(true)`.
 
@@ -256,7 +284,21 @@ SQLite implementation of `MetricsBackend`.
 
 ---
 
-### `main.rs` — Orchestrator (1159 lines)
+### `migrator.rs` — Versioned SQL Migrations (398 lines)
+
+Applies embedded, versioned SQL migrations on startup.
+
+- SQL files are embedded at compile time via `include_str!` from `migrations/{postgres,sqlite}/`, each with an integer `version` and a name.
+- A `schema_migrations` table records applied versions; `run_postgres` / `run_sqlite` skip applied migrations and apply pending ones **in order**.
+- `split_sql` is a hand-rolled multi-statement splitter that handles `--`/`/* */` comments, single- and double-quoted strings, and PostgreSQL dollar-quoted bodies (`$$ ... $$`).
+- **Transactions:** each migration applies atomically. A genuine failure aborts, rolls back, and leaves the migration **unrecorded** so the next boot retries it.
+- **SQLite idempotency:** because SQLite lacks `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, only statements failing with `duplicate column name` are tolerated (legacy column backfills in migrations 002/003); any other error aborts the run.
+
+**Upgrade rule:** never edit an already-shipped migration file — add a new numbered file. A broken migration is retried on the next boot, never silently skipped.
+
+---
+
+### `main.rs` — Orchestrator (1548 lines)
 
 The entry point. Wires together all services and manages the daemon lifecycle.
 
@@ -266,7 +308,7 @@ The entry point. Wires together all services and manages the daemon lifecycle.
 - `DaemonStatus` — 8-field struct for `/status`
 - `HealthResponse` — 8-field struct for `/health`
 - `MetricsState` — shared mutable state behind `Arc<RwLock<_>>`
-- `AppState` — `{ metrics: Arc<RwLock<MetricsState>>, backend: Arc<dyn MetricsBackend> }`
+- `AppState` — `{ metrics: Arc<RwLock<MetricsState>>, backend: Arc<dyn MetricsBackend>, settlement: SettlementEngine }`
 
 **API key authentication:**
 ```rust

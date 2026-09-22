@@ -3,6 +3,7 @@ use echo_daemon::discovery::DiscoveryService;
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
 use echo_daemon::neon;
+use echo_daemon::settlement::SettlementEngine;
 use echo_daemon::sqlite_store;
 use echo_daemon::tunnel::TunnelService;
 use echo_daemon::{
@@ -31,13 +32,137 @@ use std::{
 };
 use tokio::{signal, sync::RwLock, time::sleep};
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
-const HEARTBEAT_SECS: u64 = 10;
-const METRICS_WINDOW: usize = 60;
+/// Detect the node's public IP address by querying a public endpoint.
+/// Falls back to `None` on failure (no panics, no blocking the runtime).
+async fn detect_public_ip() -> Option<String> {
+    // Try multiple sources for resilience
+    let urls = [
+        "https://ifconfig.me/ip",
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+    ];
+    for url in &urls {
+        match reqwest::get(*url).await {
+            Ok(resp) => {
+                if let Ok(text) = resp.text().await {
+                    let ip = text.trim().to_string();
+                    // Basic validation: must look like an IP address
+                    if !ip.is_empty() && ip.len() <= 45 {
+                        return Some(ip);
+                    }
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+    None
+}
+
+const DEFAULT_HEARTBEAT_SECS: u64 = 10;
+const DEFAULT_METRICS_WINDOW: usize = 60;
 const DEFAULT_PING_TARGETS: &[&str] = &["1.1.1.1", "8.8.8.8", "208.67.222.222"];
-const RU_PER_SECOND: f64 = 1.0;
-const CAPABILITY_PUBLISH_INTERVAL_SECS: u64 = 60;
+const DEFAULT_RU_PER_SECOND: f64 = 1.0;
+const DEFAULT_CAPABILITY_PUBLISH_INTERVAL_SECS: u64 = 60;
+const DEFAULT_RETENTION_DAYS: i64 = 30;
+const DEFAULT_EARNINGS_PER_RU: f64 = 0.0001;
+const DEFAULT_SETTLEMENT_RATE_USD_PER_GB: f64 = 0.50;
+const DEFAULT_UNHEALTHY_THRESHOLD_SECS: u64 = 30;
+
+/// Runtime configuration parsed from environment variables.
+struct Config {
+    node_id: String,
+    user_id: String,
+    node_name: String,
+    region: String,
+    listen_addr: String,
+    db_path: String,
+    tunnel_listen_addr: String,
+    relay_target: String,
+    ping_targets: Vec<String>,
+    max_upload_mbps: f64,
+    max_download_mbps: f64,
+    max_sessions: u32,
+    heartbeat_secs: u64,
+    metrics_window: usize,
+    ru_per_second: f64,
+    capability_publish_interval_secs: u64,
+    retention_days: i64,
+    earnings_per_ru: f64,
+    unhealthy_threshold_secs: u64,
+    receipt_interval_packets: u64,
+    receipt_min_bytes: u64,
+    settlement_rate_usd_per_gb: f64,
+    identity_path: PathBuf,
+    database_url: Option<String>,
+    api_key: Option<String>,
+    cors_origins: Option<String>,
+    neon_max_connections: u32,
+    neon_acquire_timeout_secs: u64,
+    neon_idle_timeout_secs: u64,
+}
+
+impl Config {
+    fn from_env() -> Self {
+        Self {
+            node_id: std::env::var("NODE_ID").unwrap_or_else(|_| {
+                format!("node-{}", now_epoch_secs())
+            }),
+            user_id: std::env::var("USER_ID").unwrap_or_else(|_| "anonymous".to_string()),
+            node_name: std::env::var("NODE_NAME").unwrap_or_else(|_| "EchoNode".to_string()),
+            region: std::env::var("NODE_REGION").unwrap_or_else(|_| "auto".to_string()),
+            listen_addr: std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".to_string()),
+            db_path: std::env::var("SQLITE_DB").unwrap_or_else(|_| "sqlite:echo_node.db".to_string()),
+            tunnel_listen_addr: std::env::var("TUNNEL_ADDR").unwrap_or_else(|_| "0.0.0.0:3002".to_string()),
+            relay_target: std::env::var("RELAY_TARGET").unwrap_or_else(|_| "127.0.0.1:80".to_string()),
+            ping_targets: std::env::var("PING_TARGETS")
+                .unwrap_or_else(|_| DEFAULT_PING_TARGETS.join(","))
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            max_upload_mbps: env_f64("MAX_UPLOAD_MBPS", 100.0),
+            max_download_mbps: env_f64("MAX_DOWNLOAD_MBPS", 100.0),
+            max_sessions: env_u32("MAX_SESSIONS", 10),
+            heartbeat_secs: env_u64("HEARTBEAT_SECS", DEFAULT_HEARTBEAT_SECS),
+            metrics_window: env_usize("METRICS_WINDOW", DEFAULT_METRICS_WINDOW),
+            ru_per_second: env_f64("RU_PER_SECOND", DEFAULT_RU_PER_SECOND),
+            capability_publish_interval_secs: env_u64("CAPABILITY_PUBLISH_INTERVAL_SECS", DEFAULT_CAPABILITY_PUBLISH_INTERVAL_SECS),
+            retention_days: env_i64("RETENTION_DAYS", DEFAULT_RETENTION_DAYS),
+            earnings_per_ru: env_f64("EARNINGS_PER_RU", DEFAULT_EARNINGS_PER_RU),
+            unhealthy_threshold_secs: env_u64("UNHEALTHY_THRESHOLD_SECS", DEFAULT_UNHEALTHY_THRESHOLD_SECS),
+            receipt_interval_packets: env_u64("RECEIPT_INTERVAL_PACKETS", 100),
+            receipt_min_bytes: env_u64("RECEIPT_MIN_BYTES", 1_000_000),
+            settlement_rate_usd_per_gb: env_f64("SETTLEMENT_RATE_USD_PER_GB", DEFAULT_SETTLEMENT_RATE_USD_PER_GB),
+            identity_path: PathBuf::from(
+                std::env::var("IDENTITY_PATH").unwrap_or_else(|_| "data/identity.json".to_string()),
+            ),
+            database_url: std::env::var("DATABASE_URL").ok().filter(|v| !v.is_empty()),
+            api_key: std::env::var("API_KEY").ok().filter(|v| !v.is_empty()),
+            cors_origins: std::env::var("CORS_ORIGINS").ok().filter(|v| !v.is_empty()),
+            neon_max_connections: env_u32("NEON_MAX_CONNECTIONS", 5),
+            neon_acquire_timeout_secs: env_u64("NEON_ACQUIRE_TIMEOUT_SECS", 10),
+            neon_idle_timeout_secs: env_u64("NEON_IDLE_TIMEOUT_SECS", 240),
+        }
+    }
+}
+
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+fn env_i64(key: &str, default: i64) -> i64 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+fn env_u32(key: &str, default: u32) -> u32 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
 
 /// Constant-time byte-string comparison to prevent timing side-channel attacks.
 /// Returns `true` if `a` and `b` have the same length and every byte is equal,
@@ -190,6 +315,14 @@ pub struct MatchResponse {
     pub count: usize,
 }
 
+/// Response for GET /settlements: payout totals plus the most recent
+/// per-receipt settlement entries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettlementView {
+    pub summary: echo_daemon::SettlementSummary,
+    pub settlements: Vec<echo_daemon::SettlementRecord>,
+}
+
 struct MetricsState {
     running: bool,
     node_id: String,
@@ -208,6 +341,8 @@ struct MetricsState {
     earnings_usd: f64,
     ping_targets: Vec<String>,
     peer_id: String,
+    /// Public IP address of this node (detected on startup).
+    ip_address: Option<String>,
 }
 
 /// Shared application state available to all HTTP handlers.
@@ -215,6 +350,9 @@ struct MetricsState {
 struct AppState {
     metrics: Arc<RwLock<MetricsState>>,
     backend: Arc<dyn MetricsBackend>,
+    settlement: SettlementEngine,
+    unhealthy_threshold_secs: u64,
+    provider_match_limit: i64,
 }
 
 impl MetricsState {
@@ -225,6 +363,7 @@ impl MetricsState {
         region: &str,
         ping_targets: Vec<String>,
         peer_id: &str,
+        metrics_window: usize,
     ) -> Self {
         Self {
             running: true,
@@ -248,13 +387,14 @@ impl MetricsState {
                 network_rx_bytes: 0,
                 network_tx_bytes: 0,
             },
-            metrics_history: VecDeque::with_capacity(METRICS_WINDOW),
-            latency_history: VecDeque::with_capacity(METRICS_WINDOW),
-            packet_loss_history: VecDeque::with_capacity(METRICS_WINDOW),
+            metrics_history: VecDeque::with_capacity(metrics_window),
+            latency_history: VecDeque::with_capacity(metrics_window),
+            packet_loss_history: VecDeque::with_capacity(metrics_window),
             ru_accrued: 0.0,
             earnings_usd: 0.0,
             ping_targets,
             peer_id: peer_id.to_string(),
+            ip_address: None,
         }
     }
 }
@@ -357,9 +497,13 @@ async fn heartbeat(
     state: Arc<RwLock<MetricsState>>,
     backend: Arc<dyn MetricsBackend>,
     availability: Arc<RwLock<AvailabilityEngine>>,
+    heartbeat_secs: u64,
+    metrics_window: usize,
+    ru_per_second: f64,
+    earnings_per_ru: f64,
 ) {
     loop {
-        sleep(Duration::from_secs(HEARTBEAT_SECS)).await;
+        sleep(Duration::from_secs(heartbeat_secs)).await;
 
         // Phase 1: Collect system stats and available capacity from the
         //          availability engine *before* touching the state lock.
@@ -367,9 +511,11 @@ async fn heartbeat(
         //          held while waiting on `availability`.
         //          Uses refresh_and_compute() for a single sysinfo refresh
         //          instead of two separate refreshes.
-        let (stats, avail_upload, avail_download) = {
+        let (stats, avail_upload, avail_download, cpu_temp_c) = {
             let mut avail = availability.write().await;
-            avail.refresh_and_compute()
+            let (stats, up, down) = avail.refresh_and_compute();
+            let temp = avail.cpu_temp_c();
+            (stats, up, down, temp)
         };
 
         let cpu_pct = stats.cpu_pct;
@@ -399,6 +545,13 @@ async fn heartbeat(
         .await
         .unwrap_or((999.0, 100.0));
 
+        // Feed the latest latency sample into the availability engine so
+        // the capability descriptor reports a real avg_latency_ms.
+        {
+            let mut avail = availability.write().await;
+            avail.record_latency(latency_ms);
+        }
+
         // Phase 3: Single state-lock acquisition for all bookkeeping and
         //          DB writes.  No other lock is acquired inside this block.
         let mut st = state.write().await;
@@ -410,10 +563,10 @@ async fn heartbeat(
 
         st.latency_history.push_back(latency_ms);
         st.packet_loss_history.push_back(packet_loss_pct);
-        if st.latency_history.len() > METRICS_WINDOW {
+        if st.latency_history.len() > metrics_window {
             st.latency_history.pop_front();
         }
-        if st.packet_loss_history.len() > METRICS_WINDOW {
+        if st.packet_loss_history.len() > metrics_window {
             st.packet_loss_history.pop_front();
         }
 
@@ -439,15 +592,15 @@ async fn heartbeat(
             packet_loss_pct,
         );
 
-        let ru = uptime_secs as f64 * RU_PER_SECOND;
+        let ru = uptime_secs as f64 * ru_per_second;
         st.ru_accrued = ru;
-        st.earnings_usd = ru * 0.0001;
+        st.earnings_usd = ru * earnings_per_ru;
 
         let metrics = DaemonMetrics {
             timestamp: now_epoch_secs(),
             uptime_secs,
             cpu_pct: (cpu_pct * 100.0).round() / 100.0,
-            cpu_temp_c: 0.0,
+            cpu_temp_c: cpu_temp_c.unwrap_or(0.0),
             memory_used_bytes: stats.memory_used_bytes,
             memory_total_bytes: stats.memory_total_bytes,
             memory_pct: (mem_pct * 100.0).round() / 100.0,
@@ -471,7 +624,7 @@ async fn heartbeat(
         };
 
         st.metrics_history.push_back(metrics.clone());
-        if st.metrics_history.len() > METRICS_WINDOW {
+        if st.metrics_history.len() > metrics_window {
             st.metrics_history.pop_front();
         }
 
@@ -484,7 +637,7 @@ async fn heartbeat(
             user_id: st.user_id.clone(),
             peer_id: Some(st.peer_id.clone()),
             public_key: None,
-            ip_address: None,
+            ip_address: st.ip_address.clone(),
             region: Some(st.region.clone()),
             status: Some("online".to_string()),
             last_seen_at: Some(Utc::now().to_rfc3339()),
@@ -518,7 +671,7 @@ async fn heartbeat(
 
         let network_metrics = NetworkMetricsRow {
             user_id: st.user_id.clone(),
-            active_nodes: Some(1),
+            active_nodes: Some((stats.active_sessions as i64).max(1)),
             avg_latency_ms: Some(metrics.latency_ms),
             bandwidth_egress_mb: Some(metrics.bandwidth_up_mbps),
             bandwidth_ingress_mb: Some(metrics.bandwidth_down_mbps),
@@ -542,13 +695,36 @@ async fn heartbeat(
             metrics.available_download_mbps,
         ]);
 
+        // Multi-signal anomaly detection:
+        //   - High packet loss (>10%)
+        //   - High latency (>500ms)
+        //   - High CPU (>95%)
+        //   - Low quality score (<0.3)
+        //   - High disk usage (>95%)
+        let loss_anomaly = metrics.packet_loss_pct / 100.0;
+        let latency_anomaly = (metrics.latency_ms / 1000.0).min(1.0);
+        let cpu_anomaly = if metrics.cpu_pct > 95.0 { 0.3 } else { 0.0 };
+        let quality_anomaly = if metrics.quality_score < 0.3 {
+            0.3
+        } else {
+            0.0
+        };
+        let disk_anomaly = if metrics.disk_usage_pct > 95.0 {
+            0.1
+        } else {
+            0.0
+        };
+        let anomaly_score =
+            (loss_anomaly * 0.3 + latency_anomaly * 0.3 + cpu_anomaly + quality_anomaly + disk_anomaly)
+                .min(1.0);
+
         let intel = NodeIntelligenceRow {
             node_id: st.node_id.clone(),
             user_id: st.user_id.clone(),
             quality_score: Some(metrics.quality_score),
             trust_score: Some(metrics.trust_score),
-            anomaly_score: Some(metrics.packet_loss_pct / 100.0),
-            is_anomalous: Some(metrics.packet_loss_pct > 10.0 || metrics.latency_ms > 500.0),
+            anomaly_score: Some(anomaly_score),
+            is_anomalous: Some(anomaly_score > 0.5),
             cluster_id: Some(0),
             feature_vector: Some(feature_vector),
             recorded_at: Some(Utc::now().to_rfc3339()),
@@ -605,7 +781,7 @@ async fn handle_nodes(
         region: st.region.clone(),
         status: if st.running { "online" } else { "offline" }.to_string(),
         peer_id: st.peer_id.clone(),
-        ip_address: None,
+        ip_address: st.ip_address.clone(),
         last_seen: now_epoch_secs(),
         uptime_secs: uptime,
         cpu_pct: metrics.as_ref().map_or(0.0, |m| m.cpu_pct),
@@ -731,7 +907,7 @@ async fn handle_health(
         .map(|ts| now_epoch_secs() - ts)
         .unwrap_or(999);
 
-    let overall = if age > 30 {
+    let overall = if age > app.unhealthy_threshold_secs {
         "unhealthy"
     } else if !st.db_connected {
         "degraded"
@@ -753,6 +929,31 @@ async fn handle_health(
     })
 }
 
+async fn handle_settlements(
+    State(app): State<AppState>,
+) -> Result<Json<SettlementView>, StatusCode> {
+    let summary = app
+        .settlement
+        .summary()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "failed to load settlement summary");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let receipts = app
+        .settlement
+        .settlements(100)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "failed to load settlements");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(SettlementView {
+        summary,
+        settlements: receipts,
+    }))
+}
+
 async fn handle_match_providers(
     State(app): State<AppState>,
     Json(req): Json<MatchRequest>,
@@ -770,7 +971,7 @@ async fn handle_match_providers(
             &req.region,
             req.min_upload_mbps,
             req.min_download_mbps,
-            10,
+            app.provider_match_limit,
         )
         .await
     {
@@ -793,17 +994,20 @@ async fn handle_match_providers(
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = signal::ctrl_c().await {
+            error!(error = %e, "failed to listen for Ctrl+C");
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => { sig.recv().await; }
+            Err(e) => {
+                error!(error = %e, "failed to install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
@@ -828,72 +1032,44 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let database_url = std::env::var("DATABASE_URL").ok();
-    let node_id = std::env::var("NODE_ID").unwrap_or_else(|_| {
-        let ts = now_epoch_secs();
-        format!("node-{}", ts)
-    });
-    let user_id = std::env::var("USER_ID").unwrap_or_else(|_| "anonymous".to_string());
-    let node_name = std::env::var("NODE_NAME").unwrap_or_else(|_| "EchoNode".to_string());
-    let region = std::env::var("NODE_REGION").unwrap_or_else(|_| "auto".to_string());
-    let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".to_string());
-    let db_path = std::env::var("SQLITE_DB").unwrap_or_else(|_| "sqlite:echo_node.db".to_string());
-    let ping_targets = std::env::var("PING_TARGETS")
-        .unwrap_or_else(|_| DEFAULT_PING_TARGETS.join(","))
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>();
-    let max_upload: f64 = std::env::var("MAX_UPLOAD_MBPS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100.0);
-    let max_download: f64 = std::env::var("MAX_DOWNLOAD_MBPS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100.0);
-    let max_sessions: u32 = std::env::var("MAX_SESSIONS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
+    let config = Config::from_env();
 
     // Step 1: Load or generate node identity
-    let identity_path = PathBuf::from(
-        std::env::var("IDENTITY_PATH").unwrap_or_else(|_| "data/identity.json".to_string()),
-    );
-    let identity = NodeIdentity::load_or_generate(&identity_path, &region)?;
+    let identity = NodeIdentity::load_or_generate(&config.identity_path, &config.region)?;
     info!(
         peer_id = identity.peer_id_str(),
         "node identity loaded"
     );
 
     // Step 2: Initialize database backend
-    let backend: Arc<dyn MetricsBackend> = if let Some(url) = &database_url {
-        if !url.is_empty() {
-            info!(backend = "neon", url = %url, "database backend initialized");
-            Arc::new(neon::NeonStore::new(url).await?)
-        } else {
-            info!(backend = "sqlite", reason = "DATABASE_URL empty", "database backend initialized");
-            Arc::new(sqlite_store::SqliteStore::new(&db_path).await?)
-        }
+    let backend: Arc<dyn MetricsBackend> = if let Some(url) = &config.database_url {
+        info!(backend = "neon", url = %url, "database backend initialized");
+        Arc::new(neon::NeonStore::with_config(
+            url,
+            config.neon_max_connections,
+            config.neon_acquire_timeout_secs,
+            config.neon_idle_timeout_secs,
+        ).await?)
     } else {
         info!(backend = "sqlite", reason = "DATABASE_URL not set", "database backend initialized");
-        Arc::new(sqlite_store::SqliteStore::new(&db_path).await?)
+        Arc::new(sqlite_store::SqliteStore::new(&config.db_path).await?)
     };
 
     // Step 3: Initialize availability engine
     let availability = Arc::new(RwLock::new(AvailabilityEngine::new(
-        max_upload,
-        max_download,
-        max_sessions,
+        config.max_upload_mbps,
+        config.max_download_mbps,
+        config.max_sessions,
     )));
 
     // Step 4: Initialize metering engine
-    let (metering, receipt_rx) = MeteringEngine::new(identity.clone());
+    let (metering, receipt_rx) = MeteringEngine::with_config(
+        identity.clone(),
+        config.receipt_interval_packets,
+        config.receipt_min_bytes,
+    );
 
     // Step 4.5: Initialize tunnel service (holds metering engine alive)
-    let tunnel_listen_addr = std::env::var("TUNNEL_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:3002".to_string());
     let local_peer_id: libp2p::PeerId = identity
         .peer_id_str()
         .parse()
@@ -902,18 +1078,17 @@ async fn main() -> Result<()> {
         backend: backend.clone(),
         metering: metering.clone(),
         availability: availability.clone(),
-        target_addr: std::env::var("RELAY_TARGET")
-            .unwrap_or_else(|_| "127.0.0.1:80".to_string()),
+        target_addr: config.relay_target.clone(),
         local_peer_id: identity.peer_id_str().to_string(),
-        max_upload_mbps: max_upload,
-        max_download_mbps: max_download,
+        max_upload_mbps: config.max_upload_mbps,
+        max_download_mbps: config.max_download_mbps,
     };
     let (tunnel_service, mut tunnel_rx) = TunnelService::new(
         local_peer_id,
         metering,
         availability.clone(),
         relay_config,
-        max_sessions as usize,
+        config.max_sessions as usize,
         identity.noise_secret_key_bytes().to_vec(),
     );
 
@@ -964,9 +1139,10 @@ async fn main() -> Result<()> {
     };
     let conn_semaphore = tunnel_service.conn_semaphore();
     let static_private_key = tunnel_service.static_private_key();
+    let tunnel_addr = config.tunnel_listen_addr.clone();
     tokio::spawn(async move {
         if let Err(e) = TunnelService::accept_incoming(
-            &tunnel_listen_addr,
+            &tunnel_addr,
             tunnel_event_tx,
             relay_config,
             conn_semaphore,
@@ -1016,28 +1192,50 @@ async fn main() -> Result<()> {
     });
 
     // Step 6: Spawn heartbeat
+    let heartbeat_secs = config.heartbeat_secs;
+    let metrics_window = config.metrics_window;
+    let ru_per_second = config.ru_per_second;
+    let earnings_per_ru = config.earnings_per_ru;
+    let unhealthy_threshold_secs = config.unhealthy_threshold_secs;
     let state = Arc::new(RwLock::new(MetricsState::new(
-        &node_id,
-        &user_id,
-        &node_name,
-        &region,
-        ping_targets,
+        &config.node_id,
+        &config.user_id,
+        &config.node_name,
+        &config.region,
+        config.ping_targets.clone(),
         identity.peer_id_str(),
+        metrics_window,
     )));
+
+    // Detect public IP address (non-blocking, best-effort)
+    let state_for_ip = state.clone();
+    tokio::spawn(async move {
+        match detect_public_ip().await {
+            Some(ip) => {
+                info!(ip = %ip, "public IP detected");
+                let mut st = state_for_ip.write().await;
+                st.ip_address = Some(ip);
+            }
+            None => {
+                warn!("failed to detect public IP address (will be unknown)");
+            }
+        }
+    });
 
     let state_clone = state.clone();
     let backend_clone = backend.clone();
     let avail_clone = availability.clone();
     tokio::spawn(async move {
-        heartbeat(state_clone, backend_clone, avail_clone).await;
+        heartbeat(state_clone, backend_clone, avail_clone, heartbeat_secs, metrics_window, ru_per_second, earnings_per_ru).await;
     });
 
     // Step 7: Spawn data retention cleanup (daily)
     let cleanup_backend = backend.clone();
+    let retention_days = config.retention_days;
     tokio::spawn(async move {
         loop {
             sleep(Duration::from_secs(86400)).await;
-            match cleanup_backend.cleanup_old_metrics(30).await {
+            match cleanup_backend.cleanup_old_metrics(retention_days).await {
                 Ok(rows) => {
                     if rows > 0 {
                         info!(rows_deleted = rows, "data retention cleanup completed");
@@ -1053,16 +1251,30 @@ async fn main() -> Result<()> {
     // Step 8: Spawn capability publisher (periodic DHT republish)
     let identity_clone = identity.clone();
     let backend_clone2 = backend.clone();
+    let cap_publish_interval = config.capability_publish_interval_secs;
+    let cap_region = config.region.clone();
+    let cap_state = state.clone();
     tokio::spawn(async move {
         loop {
-            sleep(Duration::from_secs(CAPABILITY_PUBLISH_INTERVAL_SECS)).await;
+            sleep(Duration::from_secs(cap_publish_interval)).await;
+            // Compute reputation from current quality/trust scores
+            let reputation = {
+                let st = cap_state.read().await;
+                st.metrics_history
+                    .back()
+                    .map(|m| {
+                        // Weighted average: 60% quality + 40% trust
+                        m.quality_score * 0.6 + m.trust_score * 0.4
+                    })
+                    .unwrap_or(0.5)
+            };
             // Build and store capability descriptor
             let mut avail = availability.write().await;
             let cap = avail.build_capability_descriptor(
                 identity_clone.peer_id_str(),
                 identity_clone.public_key_bytes.clone(),
-                &region,
-                0.5, // default reputation
+                &cap_region,
+                reputation,
                 identity_clone.noise_public_key_bytes().to_vec(),
             );
             drop(avail);
@@ -1081,6 +1293,13 @@ async fn main() -> Result<()> {
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let mut receipt_rx_task = receipt_rx;
     let receipt_backend = backend.clone();
+    let receipt_signer_key = identity.public_key_bytes.clone();
+    let settlement_engine = SettlementEngine::new(
+        identity.clone(),
+        backend.clone(),
+        config.settlement_rate_usd_per_gb,
+    );
+    let receipt_settlement = settlement_engine.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -1089,10 +1308,31 @@ async fn main() -> Result<()> {
                     // Drain any remaining receipts before shutdown
                     let mut count = 0u64;
                     while let Ok(receipt) = receipt_rx_task.try_recv() {
-                        if let Err(e) = receipt_backend.insert_receipt(&receipt).await {
-                            error!(error = %e, "receipt flush failed during shutdown");
-                        } else {
-                            count += 1;
+                        match receipt.verify_signature(&receipt_signer_key) {
+                            Ok(true) => {
+                                if let Err(e) = receipt_backend.insert_receipt(&receipt).await {
+                                    error!(error = %e, "receipt flush failed during shutdown");
+                                } else {
+                                    count += 1;
+                                    if let Err(e) = receipt_settlement.settle_receipt(receipt).await {
+                                        error!(error = %e, "receipt settlement flush failed during shutdown");
+                                    }
+                                }
+                            }
+                            Ok(false) => {
+                                warn!(
+                                    receipt = %receipt.receipt_id,
+                                    session = %receipt.session_id,
+                                    "receipt signature verification failed during shutdown flush, skipping"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    receipt = %receipt.receipt_id,
+                                    error = %e,
+                                    "receipt malformed during shutdown flush, skipping"
+                                );
+                            }
                         }
                     }
                     if count > 0 {
@@ -1103,14 +1343,38 @@ async fn main() -> Result<()> {
                 receipt = receipt_rx_task.recv() => {
                     match receipt {
                         Some(receipt) => {
-                            if let Err(e) = receipt_backend.insert_receipt(&receipt).await {
-                                error!(error = %e, "receipt settlement failed");
-                            } else {
-                                debug!(
-                                    session = %receipt.session_id,
-                                    seq = receipt.sequence_number,
-                                    "receipt settled"
-                                );
+                            // Verify the receipt signature before persistence
+                            match receipt.verify_signature(&receipt_signer_key) {
+                                Ok(true) => {
+                                    if let Err(e) = receipt_backend.insert_receipt(&receipt).await {
+                                        error!(error = %e, "receipt settlement failed");
+                                    } else {
+                                        debug!(
+                                            session = %receipt.session_id,
+                                            seq = receipt.sequence_number,
+                                            "receipt settled"
+                                        );
+                                        // Accumulate the verified receipt toward payout.
+                                        if let Err(e) = receipt_settlement.settle_receipt(receipt).await {
+                                            error!(error = %e, "payout accumulation failed");
+                                        }
+                                    }
+                                }
+                                Ok(false) => {
+                                    warn!(
+                                        receipt = %receipt.receipt_id,
+                                        session = %receipt.session_id,
+                                        seq = receipt.sequence_number,
+                                        "receipt signature verification failed, discarding"
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        receipt = %receipt.receipt_id,
+                                        error = %e,
+                                        "receipt malformed, discarding"
+                                    );
+                                }
                             }
                         }
                         None => break,
@@ -1121,23 +1385,40 @@ async fn main() -> Result<()> {
     });
 
     // Step 10: Set up HTTP API
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    // CORS: restrict in production via CORS_ORIGINS env var (comma-separated).
+    // Defaults to allow-all for development convenience.
+    let cors = if let Some(origins_str) = &config.cors_origins {
+        let origins: Vec<_> = origins_str
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+    } else {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    };
 
     // API key for /control endpoint (optional — if unset, auth is disabled)
-    let api_key = std::env::var("API_KEY").ok().filter(|v| !v.is_empty());
-    if api_key.is_some() {
+    if config.api_key.is_some() {
         info!("API key authentication enabled for /control");
     } else {
         info!("API key authentication disabled (set API_KEY env var to enable)");
     }
-    let auth = ApiKeyAuth::new(api_key);
+    let auth = ApiKeyAuth::new(config.api_key.clone());
 
-    // /control is protected by API key middleware
+    // /control and /settlements are protected by API key middleware
     let control_routes = Router::new()
         .route("/control", post(handle_control))
+        .route("/settlements", get(handle_settlements))
         .layer(middleware::from_fn(move |req, next| {
             let auth = auth.clone();
             async move { auth.verify(req, next).await }
@@ -1155,9 +1436,12 @@ async fn main() -> Result<()> {
         .with_state(AppState {
             metrics: state,
             backend: backend.clone(),
+            settlement: settlement_engine,
+            unhealthy_threshold_secs,
+            provider_match_limit: 10,
         });
 
-    let addr: SocketAddr = listen_addr.parse()?;
+    let addr: SocketAddr = config.listen_addr.parse()?;
     info!(addr = %addr, "server listening");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

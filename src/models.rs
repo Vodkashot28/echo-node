@@ -1,4 +1,7 @@
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
+
+use crate::base64_decode;
 
 // ──────────────────────────────────────────────────────────────
 // Step 1: Repurposed models — peer reputation, connection
@@ -128,6 +131,72 @@ pub struct StateReceipt {
     pub signature: String,
 }
 
+impl StateReceipt {
+    /// Reconstruct the signed message from receipt fields.
+    ///
+    /// Format: `"{session_id}:{bytes_transferred}:{sequence_number}:{timestamp_secs}:{signer_peer_id}"`
+    pub fn signed_message(&self) -> String {
+        format!(
+            "{}:{}:{}:{}:{}",
+            self.session_id,
+            self.bytes_transferred,
+            self.sequence_number,
+            self.timestamp_secs,
+            self.signer_peer_id
+        )
+    }
+
+    /// Verify the ed25519 signature against the signer's public key.
+    ///
+    /// Returns `Ok(true)` if valid, `Ok(false)` if invalid, `Err` on
+    /// decode failure (malformed signature or key).
+    pub fn verify_signature(&self, public_key_bytes: &[u8]) -> Result<bool, anyhow::Error> {
+        let key_array: [u8; 32] = public_key_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid public key length: expected 32 bytes"))?;
+
+        let vk = VerifyingKey::from_bytes(&key_array)
+            .map_err(|e| anyhow::anyhow!("invalid ed25519 public key: {}", e))?;
+
+        let sig_bytes: [u8; 64] = base64_decode(&self.signature)
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid signature length: expected 64 bytes"))?;
+
+        let sig = Signature::from_bytes(&sig_bytes);
+        let msg = self.signed_message().into_bytes();
+
+        Ok(vk.verify_strict(&msg, &sig).is_ok())
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// New: Settlement record (payout accumulation)
+// ──────────────────────────────────────────────────────────────
+
+/// An accumulated settlement entry: one row per signed receipt that has
+/// been verified and marked for payout. Keyed by `receipt_id` so identical
+/// receipts are naturally idempotent (never double-counted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettlementRecord {
+    pub receipt_id: String,
+    pub signer_peer_id: String,
+    pub counterparty_peer_id: String,
+    /// Bytes transferred for this settlement (from the signed receipt).
+    pub bytes_settled: u64,
+    /// Payout value in USD (bytes * conversion rate).
+    pub earnings_usd: f64,
+    /// When this settlement entry was recorded (RFC3339).
+    pub settled_at: String,
+}
+
+/// Aggregated payout totals derived from the `settlements` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettlementSummary {
+    pub receipts_settled: u64,
+    pub total_bytes_settled: u64,
+    pub total_earnings_usd: f64,
+}
+
 // ──────────────────────────────────────────────────────────────
 // New: Capability descriptor (published to DHT)
 // ──────────────────────────────────────────────────────────────
@@ -166,4 +235,107 @@ pub struct SystemStats {
     pub memory_total_bytes: u64,
     pub network_rx_bytes: u64,
     pub network_tx_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::base64_encode;
+
+    #[test]
+    fn base64_decode_empty() {
+        assert!(base64_decode("").is_empty());
+    }
+
+    #[test]
+    fn base64_decode_known_values() {
+        assert_eq!(base64_decode("QQ=="), b"A");
+        assert_eq!(base64_decode("QUI="), b"AB");
+        assert_eq!(base64_decode("QUJD"), b"ABC");
+        assert_eq!(
+            base64_decode("SGVsbG8sIFdvcmxkIQ=="),
+            b"Hello, World!"
+        );
+    }
+
+    #[test]
+    fn signed_message_format() {
+        let receipt = StateReceipt {
+            receipt_id: "r1".to_string(),
+            session_id: "s1".to_string(),
+            signer_peer_id: "peer_a".to_string(),
+            counterparty_peer_id: "peer_b".to_string(),
+            bytes_transferred: 1024,
+            direction: "bidirectional".to_string(),
+            sequence_number: 5,
+            timestamp_secs: 1700000000,
+            signature: "".to_string(),
+        };
+        assert_eq!(
+            receipt.signed_message(),
+            "s1:1024:5:1700000000:peer_a"
+        );
+    }
+
+    #[test]
+    fn verify_signature_bad_key_length() {
+        let receipt = StateReceipt {
+            receipt_id: "r1".to_string(),
+            session_id: "s1".to_string(),
+            signer_peer_id: "peer_a".to_string(),
+            counterparty_peer_id: "peer_b".to_string(),
+            bytes_transferred: 1024,
+            direction: "bidirectional".to_string(),
+            sequence_number: 5,
+            timestamp_secs: 1700000000,
+            signature: base64_encode(&[0u8; 64]),
+        };
+        assert!(receipt.verify_signature(&[0u8; 16]).is_err());
+    }
+
+    #[test]
+    fn verify_signature_bad_signature_length() {
+        let receipt = StateReceipt {
+            receipt_id: "r1".to_string(),
+            session_id: "s1".to_string(),
+            signer_peer_id: "peer_a".to_string(),
+            counterparty_peer_id: "peer_b".to_string(),
+            bytes_transferred: 1024,
+            direction: "bidirectional".to_string(),
+            sequence_number: 5,
+            timestamp_secs: 1700000000,
+            signature: base64_encode(&[0u8; 32]), // only 32 bytes, need 64
+        };
+        assert!(receipt.verify_signature(&[0u8; 32]).is_err());
+    }
+
+    #[test]
+    fn verify_signature_wrong_key() {
+        use ed25519_dalek::{SigningKey, Signer};
+        use rand::rngs::OsRng;
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let other_key = SigningKey::generate(&mut OsRng).verifying_key();
+
+        let mut receipt = StateReceipt {
+            receipt_id: "r1".to_string(),
+            session_id: "s1".to_string(),
+            signer_peer_id: "peer_a".to_string(),
+            counterparty_peer_id: "peer_b".to_string(),
+            bytes_transferred: 1024,
+            direction: "bidirectional".to_string(),
+            sequence_number: 5,
+            timestamp_secs: 1700000000,
+            signature: String::new(),
+        };
+
+        // Sign with one key, verify with a different key
+        let msg = receipt.signed_message().into_bytes();
+        let sig = signing_key.sign(&msg);
+        receipt.signature = base64_encode(&sig.to_bytes());
+
+        let result = receipt.verify_signature(&other_key.to_bytes());
+        assert!(result.is_ok());
+        assert!(!result.unwrap(), "verification should have failed with wrong key");
+    }
 }

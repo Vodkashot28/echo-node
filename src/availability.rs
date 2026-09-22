@@ -3,6 +3,9 @@ use std::collections::VecDeque;
 use sysinfo::{Components, CpuRefreshKind, Disks, Networks, RefreshKind, System};
 use tracing::info;
 
+/// Rolling window size for latency samples used in average computation.
+const LATENCY_WINDOW: usize = 60;
+
 /// The Availability Engine computes how much bandwidth this node can
 /// safely advertise to the network based on current system load.
 ///
@@ -29,6 +32,8 @@ pub struct AvailabilityEngine {
     /// Network sample buffer for rate calculation (O(1) front removal)
     rx_samples: VecDeque<(u64, std::time::Instant)>,
     tx_samples: VecDeque<(u64, std::time::Instant)>,
+    /// Latency samples for computing avg_latency_ms in capability descriptors.
+    latency_samples: VecDeque<f64>,
 }
 
 impl AvailabilityEngine {
@@ -61,6 +66,7 @@ impl AvailabilityEngine {
             total_network_tx: 0,
             rx_samples: VecDeque::with_capacity(11),
             tx_samples: VecDeque::with_capacity(11),
+            latency_samples: VecDeque::with_capacity(LATENCY_WINDOW + 1),
         }
     }
 
@@ -159,11 +165,35 @@ impl AvailabilityEngine {
         }
     }
 
-    /// Compute average latency from ping history (placeholder — real impl uses stored history)
+    /// Push a new latency sample into the rolling window.
+    pub fn record_latency(&mut self, latency_ms: f64) {
+        self.latency_samples.push_back(latency_ms);
+        if self.latency_samples.len() > LATENCY_WINDOW {
+            self.latency_samples.pop_front();
+        }
+    }
+
+    /// Compute average latency from the rolling window of ping samples.
+    /// Returns 0.0 if no samples are available.
     fn compute_avg_latency(&self) -> f64 {
-        // In the full implementation, this pulls from the MetricsState latency_history.
-        // For now, derive from sysinfo or return a default.
-        0.0
+        if self.latency_samples.is_empty() {
+            0.0
+        } else {
+            let sum: f64 = self.latency_samples.iter().sum();
+            (sum / self.latency_samples.len() as f64 * 100.0).round() / 100.0
+        }
+    }
+
+    /// Read CPU temperature from sysinfo components (best-effort).
+    /// Returns `None` if no temperature sensor is available.
+    pub fn cpu_temp_c(&self) -> Option<f64> {
+        self.components
+            .iter()
+            .find(|c| {
+                let label = c.label().to_lowercase();
+                label.contains("cpu") || label.contains("core") || label.contains("processor")
+            })
+            .map(|c| c.temperature() as f64)
     }
 
     /// Combined refresh: refresh sysinfo once, then compute both

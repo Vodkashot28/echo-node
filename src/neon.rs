@@ -1,3 +1,4 @@
+use crate::migrator;
 use crate::models::*;
 use crate::MetricsBackend;
 use anyhow::{Context, Result};
@@ -12,189 +13,30 @@ pub struct NeonStore {
     pool: PgPool,
 }
 
-const SCHEMA: &[&str] = &[
-    r#"CREATE TABLE IF NOT EXISTS nodes (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        peer_id TEXT,
-        public_key TEXT,
-        ip_address TEXT,
-        region TEXT,
-        status TEXT NOT NULL DEFAULT 'offline',
-        last_seen_at TEXT,
-        uptime DOUBLE PRECISION NOT NULL DEFAULT 0,
-        latency DOUBLE PRECISION NOT NULL DEFAULT 0,
-        bandwidth_used DOUBLE PRECISION NOT NULL DEFAULT 0,
-        quality_score DOUBLE PRECISION NOT NULL DEFAULT 0,
-        earnings DOUBLE PRECISION NOT NULL DEFAULT 0,
-        packet_loss DOUBLE PRECISION NOT NULL DEFAULT 0,
-        last_updated TIMESTAMPTZ,
-        last_ip TEXT,
-        metadata JSONB DEFAULT '{}'::jsonb,
-        services JSONB NOT NULL DEFAULT '{}'::jsonb,
-        uptime_pct DOUBLE PRECISION DEFAULT 0,
-        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
-        bandwidth_down_mbps DOUBLE PRECISION DEFAULT 0,
-        bandwidth_up_mbps DOUBLE PRECISION DEFAULT 0,
-        packet_loss_pct DOUBLE PRECISION DEFAULT 0,
-        trust_score DOUBLE PRECISION DEFAULT 0,
-        sessions_count BIGINT DEFAULT 0,
-        earnings_usd DOUBLE PRECISION DEFAULT 0,
-        reported_upload_cap_mbps DOUBLE PRECISION DEFAULT 0,
-        reported_download_cap_mbps DOUBLE PRECISION DEFAULT 0,
-        supported_encryption TEXT DEFAULT 'noise-xx',
-        created_at TIMESTAMPTZ DEFAULT now(),
-        updated_at TIMESTAMPTZ DEFAULT now()
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS node_metrics (
-        id BIGSERIAL PRIMARY KEY,
-        node_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        latency_ms DOUBLE PRECISION DEFAULT 0,
-        bandwidth_down_mbps DOUBLE PRECISION DEFAULT 0,
-        bandwidth_up_mbps DOUBLE PRECISION DEFAULT 0,
-        packet_loss_pct DOUBLE PRECISION DEFAULT 0,
-        quality_score DOUBLE PRECISION DEFAULT 0,
-        earnings_usd DOUBLE PRECISION DEFAULT 0,
-        recorded_at TEXT DEFAULT (now() AT TIME ZONE 'utc')
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS network_metrics (
-        id BIGSERIAL PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        active_nodes BIGINT DEFAULT 0,
-        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
-        bandwidth_egress_mb DOUBLE PRECISION DEFAULT 0,
-        bandwidth_ingress_mb DOUBLE PRECISION DEFAULT 0,
-        packet_loss_pct DOUBLE PRECISION DEFAULT 0,
-        uptime_pct DOUBLE PRECISION DEFAULT 0,
-        earnings_usd DOUBLE PRECISION DEFAULT 0,
-        recorded_at TEXT DEFAULT (now() AT TIME ZONE 'utc')
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS node_intelligence (
-        id BIGSERIAL PRIMARY KEY,
-        node_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        quality_score DOUBLE PRECISION DEFAULT 0,
-        trust_score DOUBLE PRECISION DEFAULT 0,
-        anomaly_score DOUBLE PRECISION DEFAULT 0,
-        is_anomalous BOOLEAN DEFAULT FALSE,
-        cluster_id BIGINT DEFAULT 0,
-        feature_vector JSONB,
-        recorded_at TEXT DEFAULT (now() AT TIME ZONE 'utc')
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS peer_reputation (
-        peer_id TEXT PRIMARY KEY,
-        reputation_score DOUBLE PRECISION DEFAULT 0.5,
-        total_bytes_relayed BIGINT DEFAULT 0,
-        successful_sessions BIGINT DEFAULT 0,
-        failed_sessions BIGINT DEFAULT 0,
-        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
-        last_active_at TEXT,
-        recorded_at TEXT DEFAULT (now() AT TIME ZONE 'utc')
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS connection_history (
-        id BIGSERIAL PRIMARY KEY,
-        local_peer_id TEXT NOT NULL,
-        remote_peer_id TEXT NOT NULL,
-        remote_ip TEXT,
-        remote_port INTEGER,
-        direction TEXT NOT NULL,
-        bytes_sent BIGINT DEFAULT 0,
-        bytes_received BIGINT DEFAULT 0,
-        duration_secs DOUBLE PRECISION DEFAULT 0,
-        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
-        exit_reason TEXT,
-        started_at TEXT DEFAULT (now() AT TIME ZONE 'utc'),
-        ended_at TEXT
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS state_receipts (
-        receipt_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        signer_peer_id TEXT NOT NULL,
-        counterparty_peer_id TEXT NOT NULL,
-        bytes_transferred BIGINT DEFAULT 0,
-        direction TEXT NOT NULL,
-        sequence_number BIGINT DEFAULT 0,
-        timestamp_secs BIGINT DEFAULT 0,
-        signature TEXT NOT NULL
-    )"#,
-    r#"CREATE TABLE IF NOT EXISTS capability_descriptors (
-        peer_id TEXT PRIMARY KEY,
-        public_key BYTEA NOT NULL,
-        region TEXT NOT NULL,
-        upload_cap_mbps DOUBLE PRECISION DEFAULT 0,
-        download_cap_mbps DOUBLE PRECISION DEFAULT 0,
-        avg_latency_ms DOUBLE PRECISION DEFAULT 0,
-        reputation_score DOUBLE PRECISION DEFAULT 0.5,
-        supported_encryption TEXT DEFAULT '["noise-xx"]',
-        max_sessions INTEGER DEFAULT 1,
-        active_sessions INTEGER DEFAULT 0,
-        last_updated BIGINT DEFAULT 0,
-        noise_public_key BYTEA DEFAULT E'\\x00'
-    )"#,
-    "CREATE INDEX IF NOT EXISTS idx_conn_history_local ON connection_history(local_peer_id)",
-    "CREATE INDEX IF NOT EXISTS idx_conn_history_remote ON connection_history(remote_peer_id)",
-    "CREATE INDEX IF NOT EXISTS idx_receipts_session ON state_receipts(session_id)",
-    "CREATE INDEX IF NOT EXISTS idx_caps_region ON capability_descriptors(region)",
-];
-
-/// Inline migrations: each entry is a single, complete SQL statement.
-/// Using a slice avoids split-on-semicolon fragility with literals.
-const MIGRATIONS: &[&str] = &[
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'EchoNode'",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'anonymous'",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS peer_id TEXT",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS public_key TEXT",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS ip_address TEXT",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS region TEXT",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'offline'",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_seen_at TEXT",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS uptime DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS latency DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bandwidth_used DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS earnings DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS packet_loss DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_updated TIMESTAMPTZ",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_ip TEXT",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS services JSONB NOT NULL DEFAULT '{}'::jsonb",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS uptime_pct DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS avg_latency_ms DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bandwidth_down_mbps DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bandwidth_up_mbps DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS packet_loss_pct DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS trust_score DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS sessions_count BIGINT DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS earnings_usd DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS reported_upload_cap_mbps DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS reported_download_cap_mbps DOUBLE PRECISION DEFAULT 0",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS supported_encryption TEXT DEFAULT 'noise-xx'",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
-    "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()",
-    "ALTER TABLE capability_descriptors ADD COLUMN IF NOT EXISTS noise_public_key BYTEA DEFAULT E'\\x00'",
-    // Convert legacy TEXT[] → TEXT (JSON) for supported_encryption; no-op if already TEXT
-    "ALTER TABLE capability_descriptors ALTER COLUMN supported_encryption TYPE TEXT USING to_json(supported_encryption)::text",
-    // Upgrade created_at/updated_at from TEXT to TIMESTAMPTZ; no-op if already correct type
-    "ALTER TABLE nodes ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::TIMESTAMPTZ",
-    "ALTER TABLE nodes ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at::TIMESTAMPTZ",
-];
-
 impl NeonStore {
     pub async fn new(database_url: &str) -> Result<Self> {
+        Self::with_config(database_url, 5, 10, 240).await
+    }
+
+    /// Create a Neon store with custom pool configuration.
+    pub async fn with_config(
+        database_url: &str,
+        max_connections: u32,
+        acquire_timeout_secs: u64,
+        idle_timeout_secs: u64,
+    ) -> Result<Self> {
         let options =
             PgConnectOptions::from_str(database_url).context("invalid Neon/Postgres database URL")?;
 
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_connections)
             .min_connections(1)
             // Neon serverless computes can have cold-start latency; give enough
             // time for the compute to wake up before reporting a connection error.
-            .acquire_timeout(Duration::from_secs(10))
-            // Recycle idle connections before Neon's 5-minute inactivity suspension
+            .acquire_timeout(Duration::from_secs(acquire_timeout_secs))
+            // Recycle idle connections before Neon's inactivity suspension
             // would make them stale.
-            .idle_timeout(Duration::from_secs(240))
+            .idle_timeout(Duration::from_secs(idle_timeout_secs))
             // Hard ceiling on connection age to avoid using connections that were
             // established before a Neon compute restart.
             .max_lifetime(Duration::from_secs(1800))
@@ -205,21 +47,15 @@ impl NeonStore {
             .await
             .context("failed to connect to Neon/Postgres")?;
 
-        for &sql in SCHEMA {
-            sqlx::query(sql)
-                .execute(&pool)
-                .await
-                .context("failed to create schema")?;
-        }
-
-        for &sql in MIGRATIONS {
-            // Each migration is idempotent (IF NOT EXISTS / IF EXISTS guards).
-            // Errors from no-op migrations (e.g. column already correct type) are
-            // intentionally ignored to allow re-runs on already-migrated databases.
-            let _ = sqlx::query(sql).execute(&pool).await;
-        }
+        let migrations = migrator::postgres_migrations();
+        migrator::run_postgres(&pool, &migrations).await?;
 
         Ok(Self { pool })
+    }
+
+    /// Access the underlying pool (useful for testing).
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     pub async fn upsert_node(&self, row: &NodeRow) -> Result<()> {
@@ -229,18 +65,19 @@ impl NeonStore {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "{}".to_string());
         sqlx::query(
-            r#"INSERT INTO nodes (id, name, user_id, peer_id, public_key, region, status,
+            r#"INSERT INTO nodes (id, name, user_id, peer_id, public_key, ip_address, region, status,
                 uptime, latency, bandwidth_used, quality_score, earnings, packet_loss,
                 trust_score, reported_upload_cap_mbps, reported_download_cap_mbps,
                 last_seen_at, uptime_pct, avg_latency_ms, bandwidth_down_mbps,
                 bandwidth_up_mbps, packet_loss_pct, sessions_count, earnings_usd,
                 supported_encryption, services)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27::jsonb)
             ON CONFLICT(id) DO UPDATE SET
                 name = EXCLUDED.name,
                 user_id = EXCLUDED.user_id,
                 peer_id = EXCLUDED.peer_id,
                 public_key = EXCLUDED.public_key,
+                ip_address = EXCLUDED.ip_address,
                 region = EXCLUDED.region,
                 status = EXCLUDED.status,
                 uptime = EXCLUDED.uptime,
@@ -269,6 +106,7 @@ impl NeonStore {
         .bind(&row.user_id)
         .bind(&row.peer_id)
         .bind(&row.public_key)
+        .bind(&row.ip_address)
         .bind(&row.region)
         .bind(&row.status)
         .bind(row.uptime)
@@ -416,6 +254,7 @@ impl MetricsBackend for NeonStore {
                 successful_sessions, failed_sessions, avg_latency_ms, last_active_at, recorded_at)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
             ON CONFLICT(peer_id) DO UPDATE SET
+                reputation_score = EXCLUDED.reputation_score,
                 total_bytes_relayed = peer_reputation.total_bytes_relayed + EXCLUDED.total_bytes_relayed,
                 successful_sessions = peer_reputation.successful_sessions + EXCLUDED.successful_sessions,
                 failed_sessions = peer_reputation.failed_sessions + EXCLUDED.failed_sessions,
@@ -644,5 +483,66 @@ impl MetricsBackend for NeonStore {
                 noise_public_key: r.11,
             })
             .collect())
+    }
+
+    async fn record_settlement(&self, record: &SettlementRecord) -> Result<bool> {
+        // Idempotent per-receipt: returns `false` when the receipt was
+        // already settled (ON CONFLICT DO NOTHING skips the duplicate).
+        let res = sqlx::query(
+            r#"INSERT INTO settlements
+                (receipt_id, signer_peer_id, counterparty_peer_id, bytes_settled, earnings_usd, settled_at)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (receipt_id) DO NOTHING"#,
+        )
+        .bind(&record.receipt_id)
+        .bind(&record.signer_peer_id)
+        .bind(&record.counterparty_peer_id)
+        .bind(record.bytes_settled as i64)
+        .bind(record.earnings_usd)
+        .bind(&record.settled_at)
+        .execute(&self.pool)
+        .await
+        .context("neon record settlement")?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn get_settlements(&self, limit: i64) -> Result<Vec<SettlementRecord>> {
+        let rows: Vec<(String, String, String, i64, f64, String)> = sqlx::query_as(
+            "SELECT receipt_id, signer_peer_id, counterparty_peer_id,
+                    bytes_settled, earnings_usd, to_char(settled_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
+             FROM settlements
+             ORDER BY settled_at DESC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("neon get settlements")?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SettlementRecord {
+                receipt_id: r.0,
+                signer_peer_id: r.1,
+                counterparty_peer_id: r.2,
+                bytes_settled: r.3 as u64,
+                earnings_usd: r.4,
+                settled_at: r.5,
+            })
+            .collect())
+    }
+
+    async fn settlement_summary(&self) -> Result<SettlementSummary> {
+        let row: (i64, Option<i64>, Option<f64>) = sqlx::query_as(
+            "SELECT COUNT(*), COALESCE(SUM(bytes_settled), 0), COALESCE(SUM(earnings_usd), 0)
+             FROM settlements",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("neon settlement summary")?;
+        Ok(SettlementSummary {
+            receipts_settled: row.0 as u64,
+            total_bytes_settled: row.1.unwrap_or(0) as u64,
+            total_earnings_usd: row.2.unwrap_or(0.0),
+        })
     }
 }
