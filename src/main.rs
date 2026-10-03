@@ -228,6 +228,12 @@ pub struct DaemonMetrics {
     pub available_download_mbps: f64,
     pub active_sessions: u32,
     pub peer_id: String,
+    /// Region tag from `NODE_REGION` (echo-sync/dashboard display + matching).
+    pub region: String,
+    /// Public IP detected at startup; omitted from JSON until detection lands
+    /// (so downstream zod `.optional()` consumers never see `null`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -652,6 +658,8 @@ async fn heartbeat(
             available_download_mbps: avail_download,
             active_sessions: st.system_stats.active_sessions,
             peer_id: st.peer_id.clone(),
+            region: st.region.clone(),
+            ip_address: st.ip_address.clone(),
         };
 
         st.metrics_history.push_back(metrics.clone());
