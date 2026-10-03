@@ -7,7 +7,7 @@ Single Rust crate (`echo-daemon`), edition 2021, no workspace.
 ```sh
 cargo check                       # type-check only (fast)
 cargo clippy --all-targets        # lint
-cargo test                        # 56 tests (26 lib, 13 main, 15 integration, 1 tunnel e2e, 1 consumer e2e)
+cargo test                        # 62 tests (32 lib, 13 main, 15 integration, 1 tunnel e2e, 1 consumer e2e)
 cargo build                       # compile
 ```
 
@@ -32,6 +32,7 @@ cargo build                       # compile
 | `availability.rs` | 271 | Capacity engine — computes advertised bandwidth, session slot tracking |
 | `discovery.rs` | 214 | libp2p Kademlia DHT swarm |
 | `identity.rs` | 154 | Ed25519 + X25519 keypairs, file permissions |
+| `telemetry.rs` | ~400 | Optional dashboard bridge: heartbeat frames + session-close events → Supabase `report-telemetry` edge function; 32-dim feature vector, UUID node id, non-blocking bounded channel (`ReporterMessage`) |
 | `lib.rs` | 122 | `MetricsBackend` trait (16 methods), base64 utils, module declarations |
 
 **Data flow:** `main.rs` wires everything. `MetricsBackend` trait abstracts storage — choose Neon or SQLite at startup based on `DATABASE_URL`.
@@ -79,11 +80,12 @@ Critical ones beyond README basics:
 - `NODE_MODE` — `provider` (default: tunnel listener + capability publisher + receipt settlement) or `consumer` (forward listener on `CONSUMER_LISTEN_ADDR`; requires `PROVIDER_ADDR`, `PROVIDER_PEER_ID`, and `PROVIDER_NOISE_PUBKEY` — base64, decodes to exactly 32 bytes). In consumer mode the tunnel listener, capability publisher, and receipt settlement task are not started.
 - `TUNNEL_ADDR` — must match what consumers will connect to (default `0.0.0.0:3002`)
 - `IDENTITY_PATH` — persists node keys; old identity files auto-migrate to include Noise keys
+- `DASHBOARD_TELEMETRY_URL` + `DASHBOARD_TELEMETRY_TOKEN` + `DASHBOARD_USER_ID` — enable the opt-in heartbeat → dashboard bridge (`telemetry.rs`); `DASHBOARD_NODE_ID` pins the dashboard node UUID. See `GAPS.md`. The bridge is fully off by default and never blocks the heartbeat.
 - `RUST_LOG` — default `echo_daemon=info`; set to `debug` for verbose output
 
 ## Testing
 
-- `src/` has pure unit tests (26 total: meter, models, migrator, main). No external services required.
+- `src/` has pure unit tests (32 total: meter, models, migrator, main, telemetry). No external services required.
 - `tests/integration.rs` has 15 tests against a real SQLite store (tempfile-based): migration lifecycle, CRUD, concurrency, identity persistence, receipt round-trips, settlement.
 - `tests/tunnel_e2e.rs` runs an in-process Noise_XX tunnel end-to-end: handshake, encrypted relay through an echo target, metering receipts, and provider-side DB teardown (connection history, reputation).
 - `tests/consumer_e2e.rs` runs the full consumer-mode path: `run_consumer_listener` → `connect_to_provider` → relay to an echo target; asserts echo round-trip, availability slot acquire/release balance, provider connection history + signed receipt, and that the consumer never persists its own receipts.

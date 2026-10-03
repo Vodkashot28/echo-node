@@ -8,6 +8,7 @@ use echo_daemon::settlement::SettlementEngine;
 use echo_daemon::sqlite_store;
 use echo_daemon::tunnel::TunnelService;
 use echo_daemon::{
+    telemetry::{self, DashboardConfig, DashboardReporter, DashboardTelemetry, FeatureInputs},
     MetricsBackend, NetworkMetricsRow, NodeIntelligenceRow, NodeMetricsRow,
     NodeRow,
 };
@@ -366,6 +367,8 @@ struct MetricsState {
     peer_id: String,
     /// Public IP address of this node (detected on startup).
     ip_address: Option<String>,
+    /// Maximum concurrent tunnel sessions (from `MAX_SESSIONS`).
+    max_sessions: u32,
 }
 
 /// Shared application state available to all HTTP handlers.
@@ -379,6 +382,7 @@ struct AppState {
 }
 
 impl MetricsState {
+    #[allow(clippy::too_many_arguments)] // constructor: identity, region, ping, peer, window, max_sessions
     fn new(
         node_id: &str,
         user_id: &str,
@@ -387,6 +391,7 @@ impl MetricsState {
         ping_targets: Vec<String>,
         peer_id: &str,
         metrics_window: usize,
+        max_sessions: u32,
     ) -> Self {
         Self {
             running: true,
@@ -418,6 +423,7 @@ impl MetricsState {
             ping_targets,
             peer_id: peer_id.to_string(),
             ip_address: None,
+            max_sessions,
         }
     }
 }
@@ -516,6 +522,7 @@ fn bps_to_mbps(bps: f64) -> f64 {
     (bps / 1_000_000.0 * 100.0).round() / 100.0
 }
 
+#[allow(clippy::too_many_arguments)] // heartbeat context: state, backend, availability, timers, reporter
 async fn heartbeat(
     state: Arc<RwLock<MetricsState>>,
     backend: Arc<dyn MetricsBackend>,
@@ -524,6 +531,7 @@ async fn heartbeat(
     metrics_window: usize,
     ru_per_second: f64,
     earnings_per_ru: f64,
+    reporter: Option<DashboardReporter>,
 ) {
     loop {
         sleep(Duration::from_secs(heartbeat_secs)).await;
@@ -704,19 +712,29 @@ async fn heartbeat(
             recorded_at: Some(Utc::now().to_rfc3339()),
         };
 
-        let feature_vector = serde_json::json!([
-            metrics.cpu_pct,
-            metrics.memory_pct,
-            metrics.latency_ms,
-            metrics.packet_loss_pct,
-            metrics.bandwidth_down_mbps,
-            metrics.bandwidth_up_mbps,
-            metrics.uptime_secs as f64,
-            metrics.quality_score,
-            metrics.trust_score,
-            metrics.available_upload_mbps,
-            metrics.available_download_mbps,
-        ]);
+        // 32-dimension feature vector consumed by the echomesh dashboard.
+        // Dimension order is fixed by the dashboard's FEATURE_LABELS /
+        // node_intelligence migration — see telemetry::build_feature_vector.
+        let feature_series: Vec<FeatureInputs> = st
+            .metrics_history
+            .iter()
+            .map(|m| FeatureInputs {
+                cpu_pct: m.cpu_pct,
+                memory_pct: m.memory_pct,
+                disk_usage_pct: m.disk_usage_pct,
+                latency_ms: m.latency_ms,
+                packet_loss_pct: m.packet_loss_pct,
+                bandwidth_up_mbps: m.bandwidth_up_mbps,
+                bandwidth_down_mbps: m.bandwidth_down_mbps,
+                uptime_secs: m.uptime_secs,
+                earnings_usd: m.earnings_usd,
+                available_upload_mbps: m.available_upload_mbps,
+                available_download_mbps: m.available_download_mbps,
+                active_sessions: m.active_sessions,
+                max_sessions: st.max_sessions,
+            })
+            .collect();
+        let feature_vector = serde_json::json!(telemetry::build_feature_vector(&feature_series));
 
         // Multi-signal anomaly detection:
         //   - High packet loss (>10%)
@@ -767,6 +785,22 @@ async fn heartbeat(
         }
         if let Err(e) = backend.insert_node_intelligence(&intel).await {
             error!(error = %e, "intelligence insert failed");
+        }
+
+        // Push this heartbeat to the dashboard control plane (opt-in, never
+        // blocks the heartbeat — the reporter task does the HTTP POST).
+        if let Some(reporter) = &reporter {
+            let frame = DashboardTelemetry {
+                version: telemetry::TELEMETRY_SCHEMA_VERSION,
+                timestamp: Utc::now().to_rfc3339(),
+                node_id: reporter.node_id().to_string(),
+                user_id: reporter.user_id().to_string(),
+                node: node_row.clone(),
+                node_metrics: node_metrics.clone(),
+                network_metrics: network_metrics.clone(),
+                intelligence: intel.clone(),
+            };
+            reporter.try_push(frame);
         }
 
         debug!(
@@ -1139,9 +1173,31 @@ async fn main() -> Result<()> {
     // listener can reference the same service.
     let tunnel_service = Arc::new(tunnel_service);
 
+    // Step 4.75: Dashboard telemetry bridge (opt-in via DASHBOARD_* env vars).
+    // Created before the background tasks so both the heartbeat (metrics) and
+    // the tunnel event handler (session federation) can push real data to the
+    // echomesh control plane.
+    let reporter = match DashboardConfig::from_env() {
+        Some(cfg) => {
+            info!(
+                url = %cfg.url,
+                node_id = %cfg.node_id,
+                user_id = %cfg.user_id,
+                "dashboard telemetry reporting enabled"
+            );
+            Some(DashboardReporter::spawn(cfg))
+        }
+        None => {
+            debug!("dashboard telemetry reporting disabled (set DASHBOARD_TELEMETRY_URL, DASHBOARD_TELEMETRY_TOKEN, DASHBOARD_USER_ID)");
+            None
+        }
+    };
+
     // Spawn tunnel event handler
     // NOTE: end_session is called inside handle_incoming_connection (provider side)
     // and should NOT be called here to avoid the double-end-session bug.
+    let event_reporter = reporter.clone();
+    let settlement_rate = config.settlement_rate_usd_per_gb;
     tokio::spawn(async move {
         while let Some(event) = tunnel_rx.recv().await {
             match event {
@@ -1159,6 +1215,7 @@ async fn main() -> Result<()> {
                     session_id,
                     bytes_sent,
                     bytes_received,
+                    details,
                 } => {
                     info!(
                         session = %session_id,
@@ -1168,6 +1225,22 @@ async fn main() -> Result<()> {
                     );
                     // Do NOT call end_session here — it's already handled by
                     // handle_incoming_connection on the provider side.
+                    //
+                    // Slice 2 session federation: provider-side closes carry
+                    // full accounting; push them to the dashboard so sessions
+                    // show real relays instead of seeded rows (see GAPS.md).
+                    if let (Some(reporter), Some(details)) = (&event_reporter, &details) {
+                        let session_event = telemetry::SessionEvent::from_close(
+                            reporter.node_id(),
+                            reporter.user_id(),
+                            &session_id,
+                            bytes_sent,
+                            bytes_received,
+                            settlement_rate,
+                            details,
+                        );
+                        reporter.try_push_session(session_event);
+                    }
                 }
             }
         }
@@ -1291,7 +1364,12 @@ async fn main() -> Result<()> {
         config.ping_targets.clone(),
         identity.peer_id_str(),
         metrics_window,
+        config.max_sessions,
     )));
+
+    // Step 6.5 (moved earlier): Dashboard telemetry bridge is created right
+    // after the tunnel service so both the heartbeat and the tunnel event
+    // handler can push real data. `reporter` is already in scope above.
 
     // Detect public IP address (non-blocking, best-effort)
     let state_for_ip = state.clone();
@@ -1311,8 +1389,9 @@ async fn main() -> Result<()> {
     let state_clone = state.clone();
     let backend_clone = backend.clone();
     let avail_clone = availability.clone();
+    let reporter_clone = reporter.clone();
     tokio::spawn(async move {
-        heartbeat(state_clone, backend_clone, avail_clone, heartbeat_secs, metrics_window, ru_per_second, earnings_per_ru).await;
+        heartbeat(state_clone, backend_clone, avail_clone, heartbeat_secs, metrics_window, ru_per_second, earnings_per_ru, reporter_clone).await;
     });
 
     // Step 7: Spawn data retention cleanup (daily)

@@ -71,6 +71,23 @@ pub struct RelayConfig {
     pub max_download_mbps: f64,
 }
 
+/// Full accounting for a completed relay session, populated on the provider
+/// side (where the relay accounting is authoritative) and used to federate
+/// the session to the dashboard (see `telemetry.rs` / GAPS.md Slice 2).
+#[derive(Debug, Clone)]
+pub struct SessionCloseDetails {
+    pub remote_peer_id: String,
+    pub remote_ip: Option<String>,
+    pub remote_port: Option<u16>,
+    /// "inbound": provider accepts / "outbound": consumer dials.
+    pub direction: String,
+    pub started_at: String,
+    pub ended_at: String,
+    pub duration_secs: f64,
+    pub avg_latency_ms: f64,
+    pub exit_reason: String,
+}
+
 #[derive(Debug)]
 pub enum TunnelEvent {
     SessionEstablished {
@@ -81,6 +98,9 @@ pub enum TunnelEvent {
         session_id: String,
         bytes_sent: u64,
         bytes_received: u64,
+        /// Present on the provider side (full accounting); `None` on other
+        /// senders (e.g. a future consumer-side close) that only relay the ids.
+        details: Option<SessionCloseDetails>,
     },
 }
 
@@ -569,6 +589,20 @@ impl TunnelService {
             warn!(error = %e, "failed to update connection end");
         }
 
+        // Full accounting for dashboard federation (Slice 2) — built before
+        // `remote_peer_id_str` is moved into the reputation record below.
+        let close_details = SessionCloseDetails {
+            remote_peer_id: remote_peer_id_str.clone(),
+            remote_ip: Some(addr.ip().to_string()),
+            remote_port: Some(addr.port()),
+            direction: "inbound".to_string(),
+            started_at: connection_record.started_at.clone(),
+            ended_at: chrono::Utc::now().to_rfc3339(),
+            duration_secs: duration,
+            avg_latency_ms,
+            exit_reason: "completed".to_string(),
+        };
+
         // Update peer reputation using peer_id (not socket addr)
         // Compute a real reputation score based on session metrics:
         //   - Base score from exit reason (completed vs error)
@@ -617,6 +651,7 @@ impl TunnelService {
             session_id: session_id.clone(),
             bytes_sent,
             bytes_received,
+            details: Some(close_details),
         });
 
         info!(

@@ -401,6 +401,10 @@ cargo run --release
 | `PROVIDER_ADDR` | (unset) | Provider's `TUNNEL_ADDR` — required in consumer mode |
 | `PROVIDER_PEER_ID` | (unset) | Provider's libp2p PeerId — required in consumer mode |
 | `PROVIDER_NOISE_PUBKEY` | (unset) | Provider's base64 X25519 Noise key for handshake pinning — required in consumer mode |
+| `DASHBOARD_TELEMETRY_URL` | (unset) | Dashboard telemetry ingestion endpoint (e.g. `https://<project>.supabase.co/functions/v1/report-telemetry`). With `TOKEN` + `USER_ID`, enables the heartbeat → dashboard push (see `GAPS.md`) |
+| `DASHBOARD_TELEMETRY_TOKEN` | (unset) | Shared secret, sent as `Authorization: Bearer` — must equal the `DASHBOARD_TELEMETRY_TOKEN` function secret |
+| `DASHBOARD_USER_ID` | (unset) | Supabase auth user UUID that owns this node (binds rows for RLS) |
+| `DASHBOARD_NODE_ID` | (auto UUID) | Stable UUID for this node's dashboard `nodes` row; generated v4 at startup if unset (changes across restarts) |
 | `RUST_LOG` | `echo_daemon=info` | Log level filter |
 
 ## Dependencies

@@ -8,6 +8,7 @@ pub mod models;
 pub mod neon;
 pub mod settlement;
 pub mod sqlite_store;
+pub mod telemetry;
 pub mod tunnel;
 
 pub use models::*;
