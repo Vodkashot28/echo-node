@@ -44,10 +44,15 @@ walk (`Math.random()` ~20 places), and wrote fabricated results back — the
 dashboard's "Pipeline Control" card was a fake-data generator. It has since
 been **rewritten as a Prometheus scraper** (parses `…/metrics` text from a
 node's `node_exporter` endpoint, driven by `nodes.ip_address` +
-`metrics_port`, invoked from Pipeline Control), and the daemon's heartbeat
-reaches the dashboard through the sync path above. The random walk is gone —
-the function computes real samples from the scrape (and sets
-`last_seen_at`); its remaining job is external node_exporter scraping.
+`metrics_port`), and the daemon's heartbeat reaches the dashboard through the
+sync path above. The random walk is gone — the function computes real samples
+from the scrape (and sets `last_seen_at`); its remaining job is external
+node_exporter scraping. *(2026-10-04: the Pipeline Control card — the
+scraper's only UI trigger, an obsolete browser polling loop — was removed
+along with `useTelemetryPipeline`; `ingest-telemetry` now needs a
+manual/scheduled invoke until the target row below lands, while anomaly
+scoring moved to an automatic 5-minute background tick in
+`useNodeIntelligence`. The frontend also lost all four demo-seed buttons.)*
 
 > ⚠️ **Pending:** the `nodes.ip_address` (tunnel hostname) + `metrics_port=80`
 > UPDATE for the scraper target has not been applied yet (needs service-role
