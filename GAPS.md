@@ -29,7 +29,7 @@ but the mirror is static. No production code writes real daemon data into it.
 > **Update 2026-10-04 — a push path now exists.** `scripts/echo-sync.sh`
 > (both repos) polls the daemon's local `GET /metrics` and POSTs it to the
 > `daemon-push` edge function every ~30s, authenticated by `x-node-token` =
-> `nodes.ingest_token` (drizzle `0000_node_ingest_token.sql`). `daemon-push`
+> `nodes.ingest_token` (migration `20261004000001_add_nodes_ingest_token.sql`, ported from the retired drizzle `0000` — `supabase/migrations` is now the single migration system). `daemon-push`
 > upserts the metrics **and** persists the identity tail (`peer_id` via
 > migration `20261004000000_add_nodes_peer_id`, `region`; `ip_address`
 > deliberately left to the scrape path). The daemon still never calls
@@ -97,7 +97,7 @@ concept. There is no claim/registration flow to bind a daemon's identity
 
 **Progress (2026-10-04):**
 - Every node row carries a unique `ingest_token`
-  (drizzle `0000_node_ingest_token.sql`, DB-generated 24 random bytes hex)
+  (migration `20261004000001_add_nodes_ingest_token.sql`, DB-generated 24 random bytes hex)
   — this is the push-path credential (`x-node-token` on `daemon-push`).
 - `daemon-push` now persists the daemon's `peer_id`
   (migration `20261004000000_add_nodes_peer_id`) + `region`, written
@@ -255,7 +255,7 @@ Pipeline card's fabrication over live nodes is neutralized (**G0** partial).
 - **Live sync path:** `scripts/echo-sync.sh` (both repos, forwarder),
   `echomesh/supabase/functions/daemon-push/index.ts` (ingest_token auth,
   metrics upsert + identity write),
-  `echomesh/drizzle/migrations/0000_node_ingest_token.sql`,
+  `echomesh/supabase/migrations/20261004000001_add_nodes_ingest_token.sql`,
   `echomesh/supabase/migrations/20261004000000_add_nodes_peer_id.sql`
 - Daemon: `src/telemetry.rs` (frames + reporter), `src/tunnel.rs`
   (`SessionCloseDetails`), `src/main.rs` (heartbeat, session federation,
