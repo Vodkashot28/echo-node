@@ -441,6 +441,34 @@ fn now_epoch_secs() -> u64 {
         .as_secs()
 }
 
+/// Extract the RTT reported by `ping` itself (`time=39.2 ms` / `time<1 ms`).
+///
+/// We deliberately prefer the tool's own RTT over wall-clock
+/// `Instant::now()`-around-`Command::output()`: process spawn/reap on
+/// constrained/containerized hosts can exceed the real network RTT by
+/// 10–50× (observed: 400ms+ process overhead on a 40ms link), which
+/// poisoned `latency_ms` → `quality_score` → dashboard status.
+/// Returns `None` if no `time=` field is found (caller falls back to wall-clock).
+fn parse_ping_rtt_ms(stdout: &str) -> Option<f64> {
+    for line in stdout.lines() {
+        if let Some(pos) = line.find("time=") {
+            let rest = &line[pos + 5..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_digit() && c != '.')
+                .unwrap_or(rest.len());
+            if end > 0 {
+                if let Ok(v) = rest[..end].parse::<f64>() {
+                    return Some(v);
+                }
+            }
+        } else if line.contains("time<") {
+            // iputils prints `time<1 ms` for sub-millisecond replies
+            return Some(0.5);
+        }
+    }
+    None
+}
+
 fn measure_latency_and_loss_sync(targets: &[String]) -> (f64, f64) {
     let mut successes = 0u32;
     let mut total_ms = 0.0;
@@ -464,7 +492,10 @@ fn measure_latency_and_loss_sync(targets: &[String]) -> (f64, f64) {
         if let Ok(output) = result {
             if output.status.success() {
                 successes += 1;
-                total_ms += elapsed;
+                // Prefer ping's own RTT; wall-clock is only a fallback for
+                // platforms whose output we can't parse.
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                total_ms += parse_ping_rtt_ms(&stdout).unwrap_or(elapsed);
             }
         }
     }
@@ -1733,5 +1764,32 @@ mod tests {
         // Should be after 2020 (1577836800) and before 2100 (4102444800)
         assert!(ts > 1_577_836_800, "timestamp too old: {}", ts);
         assert!(ts < 4_102_444_800, "timestamp too far in future: {}", ts);
+    }
+
+    #[test]
+    fn parse_ping_rtt_iputils_format() {
+        let out = "64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=39.2 ms\n";
+        assert_eq!(parse_ping_rtt_ms(out), Some(39.2));
+    }
+
+    #[test]
+    fn parse_ping_rtt_busybox_and_subms() {
+        // busybox/toybox: integer-only variant
+        let out = "64 bytes from 8.8.8.8: seq=0 ttl=117 time=42 ms\n";
+        assert_eq!(parse_ping_rtt_ms(out), Some(42.0));
+        // iputils sub-millisecond form
+        let out = "64 bytes from 127.0.0.1: icmp_seq=1 ttl=64 time<1 ms\n";
+        assert_eq!(parse_ping_rtt_ms(out), Some(0.5));
+        // no rtt fields at all (error output) → fallback signal
+        assert_eq!(parse_ping_rtt_ms("ping: unknown host foo\n"), None);
+        // empty output
+        assert_eq!(parse_ping_rtt_ms(""), None);
+    }
+
+    #[test]
+    fn parse_ping_rtt_ignores_non_numeric_time() {
+        // garbled value must not panic; falls through to later lines/None
+        let out = "weird time=abc ms\n64 bytes from 1.1.1.1: icmp_seq=2 time=55.5 ms\n";
+        assert_eq!(parse_ping_rtt_ms(out), Some(55.5));
     }
 }
