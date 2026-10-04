@@ -11,17 +11,16 @@ cargo test                        # 62 tests (32 lib, 13 main, 15 integration, 1
 cargo build                       # compile
 ```
 
-- `sqlx` is a required dependency (SQLite + PostgreSQL). There is no `persistence` feature flag anymore — if you see DB-related compile errors, the issue is elsewhere.
+- `sqlx` is a required dependency (SQLite + PostgreSQL), currently **0.8** (lockfile 0.8.6). There is no `persistence` feature flag anymore — if you see DB-related compile errors, the issue is elsewhere.
 - `cargo test --no-run` can be slow on first build (~30s) due to dependency compilation.
-- Future-incompat warning exists for `sqlx-postgres v0.7.4` — ignore for now, it doesn't block compilation.
 - No `rustfmt.toml` or `clippy.toml` — uses all defaults.
 
 ## Architecture
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `main.rs` | 1650 | Entry point, REST API (axum), heartbeat, background tasks, `NODE_MODE` gating |
-| `tunnel.rs` | 906 | Noise_XX handshake, bidirectional relay, backpressure, consumer-side `connect_to_provider` |
+| `main.rs` | 1737 | Entry point, REST API (axum), heartbeat, background tasks, `NODE_MODE` gating |
+| `tunnel.rs` | 941 | Noise_XX handshake, bidirectional relay, backpressure, consumer-side `connect_to_provider` |
 | `consumer.rs` | 125 | Consumer forward listener: local apps → provider tunnel |
 | `neon.rs` | 548 | PostgreSQL backend (runs `migrations/postgres/*.sql`) |
 | `sqlite_store.rs` | 538 | SQLite backend (runs `migrations/sqlite/*.sql`) |
@@ -32,8 +31,8 @@ cargo build                       # compile
 | `availability.rs` | 271 | Capacity engine — computes advertised bandwidth, session slot tracking |
 | `discovery.rs` | 214 | libp2p Kademlia DHT swarm |
 | `identity.rs` | 154 | Ed25519 + X25519 keypairs, file permissions |
-| `telemetry.rs` | ~400 | Optional dashboard bridge: heartbeat frames + session-close events → Supabase `report-telemetry` edge function; 32-dim feature vector, UUID node id, non-blocking bounded channel (`ReporterMessage`) |
-| `lib.rs` | 122 | `MetricsBackend` trait (16 methods), base64 utils, module declarations |
+| `telemetry.rs` | 604 | Optional dashboard bridge: heartbeat frames + session-close events → Supabase `report-telemetry` edge function; 32-dim feature vector, UUID node id, non-blocking bounded channel (`ReporterMessage`) |
+| `lib.rs` | 123 | `MetricsBackend` trait (16 methods), base64 utils, module declarations |
 
 **Data flow:** `main.rs` wires everything. `MetricsBackend` trait abstracts storage — choose Neon or SQLite at startup based on `DATABASE_URL`.
 
@@ -62,7 +61,7 @@ The heartbeat in `main.rs` uses a strict 3-phase pattern to avoid nested locks:
 If you modify the heartbeat or add new background tasks, never hold `state` while acquiring `availability`.
 
 ### Double-end-session bug (already fixed)
-`end_session` is called only in `tunnel.rs:handle_incoming_connection` (provider side). The tunnel event handler in `main.rs` does NOT call it — the comment at lines 1058-1059 warns about this.
+`end_session` is called only in `tunnel.rs:handle_incoming_connection` (provider side). The tunnel event handler in `main.rs` does NOT call it — the comments at lines 1205 and 1234 warn about this.
 
 ### Migration failures are retried
 Migrations apply inside a per-file transaction. Postgres is strict; SQLite tolerates only the exact `duplicate column name` error class (legacy idempotent column backfills). Any other failure rolls back and leaves the migration unrecorded — it is retried on the next boot, so never "skip" a broken migration by ignoring the log line.
@@ -82,6 +81,15 @@ Critical ones beyond README basics:
 - `IDENTITY_PATH` — persists node keys; old identity files auto-migrate to include Noise keys
 - `DASHBOARD_TELEMETRY_URL` + `DASHBOARD_TELEMETRY_TOKEN` + `DASHBOARD_USER_ID` — enable the opt-in heartbeat → dashboard bridge (`telemetry.rs`); `DASHBOARD_NODE_ID` pins the dashboard node UUID. See `GAPS.md`. The bridge is fully off by default and never blocks the heartbeat.
 - `RUST_LOG` — default `echo_daemon=info`; set to `debug` for verbose output
+
+## Dashboard Sync (not a cargo target)
+
+`scripts/echo-sync.sh` is the **live** dashboard path: polls local `GET /metrics`
+and POSTs to the Supabase `daemon-push` edge function every ~30s
+(`ECHO_NODE_TOKEN=<nodes.ingest_token>`, header `x-node-token`). The daemon
+never calls Supabase itself; the `DASHBOARD_*` telemetry bridge is separate
+and off by default. Run it under a `while true` supervisor loop. See
+`GAPS.md` + README “Dashboard Sync”.
 
 ## Testing
 

@@ -3,7 +3,9 @@
 Status of the integration between the **echo-node** Rust daemon (`/root/echo-node`)
 and the **echomesh** dashboard (`/root/echomesh`, React + Supabase).
 
-Last updated: 2026-09-25 · Slices 1 (heartbeat ingestion) and 2 (session federation) implemented.
+Last updated: 2026-10-04 · Slices 1 (heartbeat ingestion) and 2 (session
+federation) implemented; **live sync path** (`scripts/echo-sync.sh` →
+`daemon-push`) deployed, with `peer_id`/`region` identity fields flowing.
 
 ---
 
@@ -24,15 +26,32 @@ but the mirror is static. No production code writes real daemon data into it.
 > [Slice 1 — Real telemetry ingestion](#slice-1--real-telemetry-ingestion-implemented)
 > below.
 
+> **Update 2026-10-04 — a push path now exists.** `scripts/echo-sync.sh`
+> (both repos) polls the daemon's local `GET /metrics` and POSTs it to the
+> `daemon-push` edge function every ~30s, authenticated by `x-node-token` =
+> `nodes.ingest_token` (drizzle `0000_node_ingest_token.sql`). `daemon-push`
+> upserts the metrics **and** persists the identity tail (`peer_id` via
+> migration `20261004000000_add_nodes_peer_id`, `region`; `ip_address`
+> deliberately left to the scrape path). The daemon still never calls
+> Supabase itself — `report-telemetry` (Slice 1) remains dormant — but for
+> *metrics*, the "no data path" statement below is no longer true.
+
 ## The gaps (ranked)
 
-### G0 — "Telemetry pipeline" is theater
-`echomesh/supabase/functions/ingest-telemetry/index.ts` does **not ingest
-anything** — it reads existing Supabase rows, applies a random walk
-(`Math.random()` ~20 places), and writes fabricated results back. The dashboard's
-"Pipeline Control" card is a fake-data generator. The daemon's heartbeat
-produces real metrics (CPU, memory, disk, ping latency/loss, bandwidth,
-quality/trust, available capacity) that never reach the dashboard.
+### G0 — "Telemetry pipeline" was theater (now a real scraper + real push)
+Historically `ingest-telemetry` read existing Supabase rows, applied a random
+walk (`Math.random()` ~20 places), and wrote fabricated results back — the
+dashboard's "Pipeline Control" card was a fake-data generator. It has since
+been **rewritten as a Prometheus scraper** (parses `…/metrics` text from a
+node's `node_exporter` endpoint, driven by `nodes.ip_address` +
+`metrics_port`, invoked from Pipeline Control), and the daemon's heartbeat
+reaches the dashboard through the sync path above. The random walk is gone —
+the function computes real samples from the scrape (and sets
+`last_seen_at`); its remaining job is external node_exporter scraping.
+
+> ⚠️ **Pending:** the `nodes.ip_address` (tunnel hostname) + `metrics_port=80`
+> UPDATE for the scraper target has not been applied yet (needs service-role
+> access) — until then the scraper has no target row and returns no samples.
 
 ### G1 — Shared table names, incompatible contracts
 `nodes` / `node_metrics` / `network_metrics` / `node_intelligence` exist on both
@@ -66,10 +85,20 @@ only shows seeded demo rows.
 
 The dashboard cannot distinguish real earnings from fabricated ones.
 
-### G4 — No auth/identity bridge
+### G4 — No auth/identity bridge (partially addressed)
 Dashboard = Supabase Auth (JWT, RLS by `auth.uid()`). Daemon = no account
 concept. There is no claim/registration flow to bind a daemon's identity
 (peer_id, keys) to a dashboard user UUID.
+
+**Progress (2026-10-04):**
+- Every node row carries a unique `ingest_token`
+  (drizzle `0000_node_ingest_token.sql`, DB-generated 24 random bytes hex)
+  — this is the push-path credential (`x-node-token` on `daemon-push`).
+- `daemon-push` now persists the daemon's `peer_id`
+  (migration `20261004000000_add_nodes_peer_id`) + `region`, written
+  best-effort/non-fatal so a missing column can't break the metrics path.
+- Still open: user-facing claim/pairing UX, and persisting
+  `DASHBOARD_NODE_ID` into `identity.json` (Slice 3).
 
 ### G5 — Feature drift in both directions
 Dashboard-only: `sessions`, IPFS `artifacts` / `generate-cid` / `ipfs-resolve`,
@@ -209,20 +238,26 @@ Pipeline card's fabrication over live nodes is neutralized (**G0** partial).
 
 | Slice | Scope | Status |
 |---|---|---|
-| 1 | Real heartbeat ingestion: `telemetry.rs` + `report-telemetry` edge function + 32-dim vector + UUID node registration | ✅ Done |
-| 2 | **Session federation**: provider relay accounting → `sessions` (idempotent upsert); synthetic `ingest-telemetry` skips live nodes (G2, G0 partial) | ✅ Done (this document) |
-| 3 | **Claim/registration UX**: pairing flow binding a daemon (peer_id + keys) to a dashboard account; `DASHBOARD_NODE_ID` persistence in `identity.json` (G4) | 🔜 Next |
+| 0 | **Live sync path**: `echo-sync.sh` → `daemon-push` (ingest_token auth) + identity columns (`peer_id`/`region`) | ✅ Live (2026-10-03/04) |
+| 1 | Real heartbeat ingestion: `telemetry.rs` + `report-telemetry` edge function + 32-dim vector + UUID node registration | ✅ Implemented (dormant — no `DASHBOARD_*` env set) |
+| 2 | **Session federation**: provider relay accounting → `sessions` (idempotent upsert); synthetic `ingest-telemetry` replaced by Prometheus scraper (G2, G0 partial) | ✅ Done |
+| 3 | **Claim/registration UX**: pairing flow binding a daemon (peer_id + keys) to a dashboard account; `DASHBOARD_NODE_ID` persistence in `identity.json` (G4) — note `peer_id`/`region` persistence already landed | 🔜 Next |
 | 4 | **Match/capacity surfacing**: expose `capability_descriptors` + availability via edge function or RLS-view so the dashboard can show advertised capacity / provider matchmaking (G5 daemon-only) | ⏳ |
 | 5 | **Decision**: IPFS `artifacts` + `copilot-chat` — either wire `cdn`/`storage` session types to them or park them (G5 dashboard-only) | ⏳ |
 
 ## Related files
 
+- **Live sync path:** `scripts/echo-sync.sh` (both repos, forwarder),
+  `echomesh/supabase/functions/daemon-push/index.ts` (ingest_token auth,
+  metrics upsert + identity write),
+  `echomesh/drizzle/migrations/0000_node_ingest_token.sql`,
+  `echomesh/supabase/migrations/20261004000000_add_nodes_peer_id.sql`
 - Daemon: `src/telemetry.rs` (frames + reporter), `src/tunnel.rs`
   (`SessionCloseDetails`), `src/main.rs` (heartbeat, session federation,
   startup), `Cargo.toml`
 - Dashboard: `supabase/functions/report-telemetry/index.ts` (heartbeat +
-  session routing), `supabase/functions/ingest-telemetry/index.ts` (synthetic,
-  skips live nodes), `supabase/config.toml`,
+  session routing), `supabase/functions/ingest-telemetry/index.ts`
+  (Prometheus scraper), `supabase/config.toml`,
   `supabase/migrations/20260925000000_*.sql` (sessions.session_id)
 - Contract: `echomesh/supabase/migrations/20260212024450_*.sql` (`sessions`
   table), `20260211084823_*.sql` (32-dim `node_intelligence`),

@@ -15,12 +15,12 @@ Detailed architectural analysis of the Echo Node daemon. For the high-level over
 
 ## Component Inventory
 
-### `lib.rs` — Crate Root (122 lines)
+### `lib.rs` — Crate Root (123 lines)
 
-Declares 11 modules plus shared base64 utilities and defines the `MetricsBackend` async trait with 16 methods.
+Declares 12 modules plus shared base64 utilities and defines the `MetricsBackend` async trait with 16 methods.
 
 ```
-pub mod { availability, consumer, discovery, identity, meter, migrator, models, neon, settlement, sqlite_store, tunnel }
+pub mod { availability, consumer, discovery, identity, meter, migrator, models, neon, settlement, sqlite_store, telemetry, tunnel }
 pub use models::*          // blanket re-export of all data models
 pub use neon::NeonStore    // PostgreSQL backend
 pub use sqlite_store::SqliteStore  // SQLite backend
@@ -129,7 +129,7 @@ pub enum DiscoveryEvent {
 
 ---
 
-### `tunnel.rs` — Noise_XX Encrypted Tunnel (906 lines)
+### `tunnel.rs` — Noise_XX Encrypted Tunnel (941 lines)
 
 The largest and most complex module. Handles the full tunnel lifecycle: pre-handshake exchange, Noise_XX handshake, bidirectional encrypted relay, and session teardown.
 
@@ -164,7 +164,16 @@ pub struct TunnelService {
 
 pub enum TunnelEvent {
     SessionEstablished { session_id: String, remote_peer_id: libp2p::PeerId },
-    SessionClosed { session_id: String, bytes_sent: u64, bytes_received: u64 },
+    SessionClosed {
+        session_id: String,
+        bytes_sent: u64,
+        bytes_received: u64,
+        // Full provider-side teardown accounting (remote peer/ip/port, start/end,
+        // duration, avg latency, exit_reason) — `Some` on the provider, `None`
+        // reserved for consumer-side closes. Federated to the dashboard's
+        // `sessions` table by `telemetry.rs`.
+        details: Option<SessionCloseDetails>,
+    },
 }
 ```
 
@@ -326,12 +335,41 @@ Applies embedded, versioned SQL migrations on startup.
 
 ---
 
-### `main.rs` — Orchestrator (1650 lines)
+### `telemetry.rs` — Dashboard Bridge (604 lines)
+
+Optional, off-by-default push bridge from the daemon to the echomesh
+dashboard's `report-telemetry` edge function. Enabled only when
+`DASHBOARD_TELEMETRY_URL` + `DASHBOARD_TELEMETRY_TOKEN` + `DASHBOARD_USER_ID`
+are set (see `GAPS.md`, Slice 1/2).
+
+**Key pieces:**
+- `DashboardConfig::from_env()` — reads the `DASHBOARD_*` env vars;
+  `DASHBOARD_NODE_ID` pins the dashboard node UUID (a fresh v4 UUID is
+  generated per startup if unset).
+- `DashboardReporter` — bounded channel (64) with a background posting task.
+  `try_push` / `try_push_session` are **non-blocking** (the heartbeat never
+  waits on HTTP); 10s timeout; errors are logged, best-effort only.
+- `ReporterMessage::{Telemetry, Session}` — heartbeat frames and
+  session-close events share one queue.
+- `build_feature_vector()` — the **32-dim** feature vector the dashboard's
+  `node_intelligence` schema expects, in migration order; real signal where
+  the daemon has it, documented neutral baselines elsewhere — no random noise.
+- `SessionEvent::from_close(...)` — maps `TunnelEvent::SessionClosed`'s
+  `SessionCloseDetails` into an idempotent `sessions` upsert
+  (`kind="session"`, `action="closed"`, estimated per-session USD).
+
+**Note:** this is *not* the live dashboard path. The active forwarder is
+`scripts/echo-sync.sh` → `daemon-push` (README “Dashboard Sync”); the
+reporter ships with the code but stays dormant without env vars.
+
+---
+
+### `main.rs` — Orchestrator (1737 lines)
 
 The entry point. Wires together all services and manages the daemon lifecycle.
 
 **Data structures:**
-- `DaemonMetrics` — 24-field struct serialized as JSON for `/metrics`
+- `DaemonMetrics` — 26-field struct serialized as JSON for `/metrics` (includes the identity tail `peer_id`, `region`, `ip_address` — the latter omitted from JSON until public-IP detection lands)
 - `DaemonNode` — 20-field struct for `/nodes`
 - `DaemonStatus` — 8-field struct for `/status`
 - `HealthResponse` — 8-field struct for `/health`
@@ -433,6 +471,10 @@ Phase 3: spawn_blocking(ping) → state.write() → upsert to DB → release
 ### Background Task Spawning
 
 ```
+// one-shot at startup:
+tokio::spawn(detect_public_ip(...))     // fills ip_address on /metrics
+// opt-in (only when DASHBOARD_* env vars are set):
+DashboardReporter::spawn(...)           // telemetry.rs → report-telemetry
 tokio::spawn(heartbeat(...))           // periodic, 10s interval
 tokio::spawn(metric_cleanup(...))       // periodic, daily
 tokio::spawn(discovery.run())           // continuous event loop
@@ -476,7 +518,10 @@ tokio::spawn(consumer_listener(...))    // accept local apps → provider tunnel
 
 ## Database Schema
 
-8 tables, 4 indexes. All DDL is inline in both backend modules.
+9 business tables + `schema_migrations`. All DDL lives in versioned SQL
+migrations (`migrations/{postgres,sqlite}/*.sql`, numbered 001–004), embedded
+at compile time and applied in order by `migrator.rs` inside per-file
+transactions.
 
 ### Table Summary
 
@@ -490,6 +535,8 @@ tokio::spawn(consumer_listener(...))    // accept local apps → provider tunnel
 | `connection_history` | `id SERIAL` | Per-session connection records | 1 per session |
 | `state_receipts` | `receipt_id TEXT` | Signed transfer receipts | ~N per session |
 | `capability_descriptors` | `peer_id TEXT` | DHT-published capacity info | 1 per node |
+| `settlements` | `receipt_id TEXT` | Idempotent USD payout rows (migration 004) | 1 per settled receipt |
+| `schema_migrations` | `version INTEGER` | Applied-migration ledger | 1 per migration |
 
 ### Indexes
 

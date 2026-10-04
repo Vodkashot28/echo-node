@@ -310,19 +310,23 @@ Schema is created and upgraded by versioned SQL migrations (`migrations/{postgre
 ```
 src/
 ├── lib.rs              # MetricsBackend trait (16 methods) + shared base64 utils
-├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (1650 lines)
+├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (1737 lines)
 ├── models.rs           # 10 data models (NodeRow, PeerReputation, SettlementRecord, etc.)
 ├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, file permissions
 ├── discovery.rs        # libp2p Kademlia DHT swarm, provider discovery
-├── tunnel.rs           # Noise_XX handshake, bidirectional relay, backpressure (906 lines)
+├── tunnel.rs           # Noise_XX handshake, bidirectional relay, backpressure (941 lines)
 ├── consumer.rs         # Consumer forward listener: local apps → provider tunnel
 ├── meter.rs            # Token bucket, signed receipts, session metering
 ├── availability.rs     # Capacity engine, session management
 ├── migrator.rs         # Versioned SQL migrations: splitter, apply, schema_migrations
 ├── neon.rs             # PostgreSQL backend (runs migrations/postgres/*.sql)
 ├── settlement.rs       # Payout engine: receipts → idempotent settlement rows (bytes + USD)
+├── telemetry.rs        # Optional dashboard bridge (DASHBOARD_* env): heartbeat + session-close frames → Supabase (604 lines)
 └── sqlite_store.rs     # SQLite backend (runs migrations/sqlite/*.sql)
 ```
+
+The dashboard sync forwarder lives at `scripts/echo-sync.sh` (see
+[Dashboard Sync](#dashboard-sync) below).
 
 Migrations are versioned SQL files embedded at compile time from `migrations/{postgres,sqlite}/`, applied in order with `schema_migrations` tracking:
 
@@ -342,7 +346,7 @@ cargo run --release
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/metrics` | None | Latest metrics with capacity info |
+| GET | `/metrics` | None | Latest metrics with capacity info + identity (`peer_id`, `region`, `ip_address`) |
 | GET | `/nodes` | None | Node info with peer ID + availability |
 | GET | `/history` | None | Last 60 metric samples |
 | GET | `/status` | None | Daemon status + active sessions |
@@ -352,6 +356,24 @@ cargo run --release
 | GET | `/settlements` | Bearer | Payout totals + settled receipts |
 
 ### Response Examples
+
+**GET /metrics** (identity tail — what the dashboard sync forwarder picks up)
+```json
+{
+  "timestamp": 1791064471,
+  "uptime_secs": 3815,
+  "latency_ms": 348.48,
+  "quality_score": 0.63,
+  "trust_score": 0.43,
+  "available_upload_mbps": 29.78,
+  "active_sessions": 0,
+  "peer_id": "12D3KooWQooCi...",
+  "region": "auto",
+  "ip_address": "2001:fd8:2c86:dd71:..."
+}
+```
+`region` comes from `NODE_REGION`; `ip_address` is the public IP detected at
+startup and is omitted from the JSON until detection lands (never `null`).
 
 **GET /status**
 ```json
@@ -375,6 +397,29 @@ cargo run --release
   "min_download_mbps": 50.0
 }
 ```
+
+## Dashboard Sync
+
+The daemon itself never calls Supabase — the opt-in `report-telemetry` bridge
+(`DASHBOARD_*` env vars, `telemetry.rs`) is off by default. The **live**
+dashboard path is an external forwarder:
+
+```bash
+# from echo-node/ (or echomesh/) — value is the node's nodes.ingest_token
+ECHO_NODE_TOKEN=<ingest_token> ./scripts/echo-sync.sh
+```
+
+- Polls the local `GET /metrics` endpoint and POSTs the JSON to the Supabase
+  edge function `daemon-push` every ~30s, header `x-node-token`.
+- `daemon-push` resolves the dashboard row by `ingest_token` (DB-generated:
+  `encode(gen_random_bytes(24),'hex')`, unique per node) and upserts the
+  metrics; it also persists `peer_id` + `region` from the payload.
+  `ip_address` is intentionally **not** written there — the node-exporter
+  scrape path owns that column.
+- Run it under a supervisor loop so transient outages self-heal:
+  `while true; do ./scripts/echo-sync.sh; sleep 5; done`
+
+See `GAPS.md` for the full integration status.
 
 ## Environment Variables
 
@@ -417,7 +462,8 @@ cargo run --release
 | `tokio` | 1.36 | Async runtime (multi-thread) |
 | `axum` | 0.7 | REST API framework |
 | `tower-http` | 0.5 | CORS middleware |
-| `sqlx` | 0.7 | Database (SQLite + PostgreSQL) |
+| `sqlx` | 0.8 | Database (SQLite + PostgreSQL) |
+| `reqwest` | 0.12 | HTTPS client (dashboard telemetry bridge, public IP detection) |
 | `sysinfo` | 0.30 | CPU, memory, disk, network metrics |
 | `tracing` | 0.1 | Structured logging |
 | `chrono` | 0.4 | Date/time handling |
@@ -427,24 +473,28 @@ cargo run --release
 
 ## Background Tasks
 
-The daemon spawns up to 8 concurrent background tasks on startup. The last
-four are gated on `NODE_MODE`: providers run the tunnel listener, capability
+The daemon spawns up to 10 concurrent background tasks on startup: the eight
+core tasks below, plus a one-shot public-IP detection task and (only when
+`DASHBOARD_*` env vars are set) the optional telemetry reporter. Core tasks
+are gated on `NODE_MODE`: providers run the tunnel listener, capability
 publisher, and receipt settlement; consumers run a single forward listener
 instead (task 9).
 
 | # | Task | Line | Description |
 |---|------|------|-------------|
-| 1 | **Tunnel Event Handler** | 909 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
-| 2 | **Tunnel Listener** | 951 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
-| 3 | **Discovery Event Loop** | 981 | Runs libp2p swarm event loop, handles DHT GetProviders/PutRecord results |
-| 4 | **Discovery Event Handler** | 986 | Processes `DiscoveryEvent::PeerFound/Disconnected/CapabilityPublished` |
-| 5 | **Heartbeat** | 1015 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
-| 6 | **Metric Cleanup** | 1021 | Removes metrics older than 30 days (daily) |
-| 7 | **Capability Publisher** | 1040 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
-| 8 | **Receipt Settlement** | 1068 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
+| — | **Dashboard Reporter** | 1196 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
+| — | **Public IP detection** | 1384 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
+| 1 | **Tunnel Event Handler** | 1209 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
+| 2 | **Tunnel Listener** | 1273 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
+| 3 | **Discovery Event Loop** | 1340 | Runs libp2p swarm event loop, handles DHT GetProviders/PutRecord results |
+| 4 | **Discovery Event Handler** | 1345 | Processes `DiscoveryEvent::PeerFound/Disconnected/CapabilityPublished` |
+| 5 | **Heartbeat** | 1401 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
+| 6 | **Metric Cleanup** | 1408 | Removes metrics older than 30 days (daily) |
+| 7 | **Capability Publisher** | 1432 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
+| 8 | **Receipt Settlement** | 1484 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
 | 9 | **Consumer Listener** | `consumer.rs` (consumer only) | Accepts local app connections on `CONSUMER_LISTEN_ADDR`, dials the provider (`connect_to_provider`), relays app traffic through the Noise tunnel without issuing consumer receipts |
 
-Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1148).
+Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1634).
 
 ## Consumer Mode Quick Start
 
