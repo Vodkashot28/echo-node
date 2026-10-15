@@ -6,6 +6,11 @@ use tracing::info;
 /// Rolling window size for latency samples used in average computation.
 const LATENCY_WINDOW: usize = 60;
 
+/// Default smoothing factor for the availability estimator: 0.3 keeps the
+/// advertised capacity responsive without letting one noisy sysinfo sample
+/// bounce the DHT record. `1.0` disables smoothing (raw passthrough).
+pub const DEFAULT_EWMA_ALPHA: f64 = 0.3;
+
 /// The Availability Engine computes how much bandwidth this node can
 /// safely advertise to the network based on current system load.
 ///
@@ -34,6 +39,26 @@ pub struct AvailabilityEngine {
     tx_samples: VecDeque<(u64, std::time::Instant)>,
     /// Latency samples for computing avg_latency_ms in capability descriptors.
     latency_samples: VecDeque<f64>,
+    /// EWMA smoothing factor for advertised availability (0 < alpha <= 1).
+    ewma_alpha: f64,
+    /// Smoothed upload/download availability estimates (None until first sample).
+    ewma_upload: Option<f64>,
+    ewma_download: Option<f64>,
+}
+
+/// One exponentially-weighted step of the availability estimator.
+///
+/// - first sample (`prev == None`) → raw value (bootstraps the estimate)
+/// - raw `<= 0` → snap to `0.0` (a saturated node must advertise zero, not
+///   an asymptotically-decaying leftover)
+/// - otherwise `prev + alpha * (raw - prev)`, rounded to 2 decimals
+fn ewma_step(prev: Option<f64>, raw: f64, alpha: f64) -> f64 {
+    let est = match prev {
+        None => raw,
+        Some(_) if raw <= 0.0 => 0.0,
+        Some(p) => p + alpha.clamp(0.0, 1.0) * (raw - p),
+    };
+    (est * 100.0).round() / 100.0
 }
 
 impl AvailabilityEngine {
@@ -67,7 +92,36 @@ impl AvailabilityEngine {
             rx_samples: VecDeque::with_capacity(11),
             tx_samples: VecDeque::with_capacity(11),
             latency_samples: VecDeque::with_capacity(LATENCY_WINDOW + 1),
+            ewma_alpha: DEFAULT_EWMA_ALPHA,
+            ewma_upload: None,
+            ewma_download: None,
         }
+    }
+
+    /// Override the availability EWMA smoothing factor (`AVAIL_EWMA_ALPHA`).
+    /// Values outside `(0, 1]` are clamped: `1.0` = no smoothing.
+    pub fn with_ewma_alpha(mut self, alpha: f64) -> Self {
+        if !alpha.is_finite() || alpha <= 0.0 || alpha > 1.0 {
+            tracing::warn!(
+                value = %alpha,
+                "AVAIL_EWMA_ALPHA must be in (0, 1]; using default {DEFAULT_EWMA_ALPHA}"
+            );
+            self.ewma_alpha = DEFAULT_EWMA_ALPHA;
+        } else {
+            self.ewma_alpha = alpha;
+        }
+        self
+    }
+
+    /// Current smoothing factor (observability/tests).
+    pub fn ewma_alpha(&self) -> f64 {
+        self.ewma_alpha
+    }
+
+    /// Current smoothed availability estimates (`upload`, `download`);
+    /// `None` until the first compute.
+    pub fn ewma_estimates(&self) -> (Option<f64>, Option<f64>) {
+        (self.ewma_upload, self.ewma_download)
     }
 
     /// Refresh system metrics and recalculate local bandwidth usage.
@@ -266,7 +320,15 @@ impl AvailabilityEngine {
         let avail_up = (avail_up * 100.0).round() / 100.0;
         let avail_down = (avail_down * 100.0).round() / 100.0;
 
-        (stats, avail_up, avail_down)
+        // Availability estimator: smooth the advertised capacity so a single
+        // noisy CPU/memory sample doesn't bounce the DHT record. Saturated
+        // (0.0) results snap to zero inside `ewma_step`.
+        let est_up = ewma_step(self.ewma_upload, avail_up, self.ewma_alpha);
+        let est_down = ewma_step(self.ewma_download, avail_down, self.ewma_alpha);
+        self.ewma_upload = Some(est_up);
+        self.ewma_download = Some(est_down);
+
+        (stats, est_up, est_down)
     }
 }
 
@@ -388,5 +450,68 @@ mod tests {
         assert_eq!(up, 0.0);
         assert_eq!(down, 0.0);
         assert!(engine.try_acquire_session().is_err());
+    }
+
+    // ── Availability estimator (EWMA) ──────────────────────────────
+
+    #[test]
+    fn ewma_first_sample_is_raw() {
+        assert_eq!(ewma_step(None, 42.37, 0.3), 42.37);
+        assert_eq!(ewma_step(None, 0.0, 0.3), 0.0);
+        assert_eq!(ewma_step(None, 100.0, 1.0), 100.0);
+    }
+
+    #[test]
+    fn ewma_blends_and_rounds() {
+        // 10 + 0.5 * (20 - 10) = 15
+        assert_eq!(ewma_step(Some(10.0), 20.0, 0.5), 15.0);
+        // rounding to 2 decimals: 10.005 → 10.01 (float-safe values only)
+        assert_eq!(ewma_step(Some(10.0), 10.004, 1.0), 10.0);
+        // alpha 1.0 = raw passthrough
+        assert_eq!(ewma_step(Some(10.0), 7.5, 1.0), 7.5);
+        // alpha 0.0 = hold previous (clamped range allows 0 inside helper)
+        assert_eq!(ewma_step(Some(10.0), 7.5, 0.0), 10.0);
+        // alpha out of range is clamped
+        assert_eq!(ewma_step(Some(10.0), 20.0, 99.0), 20.0);
+        assert_eq!(ewma_step(Some(10.0), 20.0, -1.0), 10.0);
+    }
+
+    #[test]
+    fn ewma_snaps_to_zero_when_raw_saturated() {
+        // A saturated node must advertise exactly 0, not a decaying residue.
+        assert_eq!(ewma_step(Some(35.7), 0.0, 0.3), 0.0);
+        assert_eq!(ewma_step(Some(35.7), -1.0, 0.3), 0.0);
+        // …and recovers from zero toward the next positive raw sample.
+        assert_eq!(ewma_step(Some(0.0), 10.0, 0.3), 3.0);
+    }
+
+    #[test]
+    fn ewma_converges_toward_raw_over_repeated_samples() {
+        let mut est = None;
+        for _ in 0..64 {
+            est = Some(ewma_step(est, 100.0, 0.3));
+        }
+        assert!((est.unwrap() - 100.0).abs() < 0.5, "should converge, got {est:?}");
+    }
+
+    #[test]
+    fn engine_estimator_bootstraps_on_first_compute() {
+        let mut engine = AvailabilityEngine::new(HUGE_MBPS, HUGE_MBPS, 10);
+        assert_eq!(engine.ewma_estimates(), (None, None));
+        let (_, up, _down) = engine.refresh_and_compute();
+        let (eu, ed) = engine.ewma_estimates();
+        assert_eq!(eu, Some(up), "first estimate == first raw sample");
+        assert!(ed.is_some());
+        assert!((engine.ewma_alpha() - DEFAULT_EWMA_ALPHA).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ewma_alpha_builder_clamps_invalid_values() {
+        let e = AvailabilityEngine::new(100.0, 100.0, 1).with_ewma_alpha(0.5);
+        assert_eq!(e.ewma_alpha(), 0.5);
+        let e = AvailabilityEngine::new(100.0, 100.0, 1).with_ewma_alpha(7.0);
+        assert_eq!(e.ewma_alpha(), DEFAULT_EWMA_ALPHA, "out-of-range → default");
+        let e = AvailabilityEngine::new(100.0, 100.0, 1).with_ewma_alpha(f64::NAN);
+        assert_eq!(e.ewma_alpha(), DEFAULT_EWMA_ALPHA, "NaN → default");
     }
 }

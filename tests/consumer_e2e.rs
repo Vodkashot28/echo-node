@@ -113,6 +113,7 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
         max_download_mbps: 10.0,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 10_000,
     };
     let (provider_svc, _provider_events) = TunnelService::new(
         provider_peer_id,
@@ -135,6 +136,7 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
         max_download_mbps: provider_svc.relay_config().max_download_mbps,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 10_000,
     };
     let listener_addr = tunnel_addr.clone();
     let listener_task = tokio::spawn(async move {
@@ -166,6 +168,7 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
         max_download_mbps: 10.0,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 10_000,
     };
     let (consumer_svc, _consumer_events) = TunnelService::new(
         consumer.peer_id_str().parse::<libp2p::PeerId>().unwrap(),

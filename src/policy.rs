@@ -37,6 +37,10 @@ pub struct PolicyConfig {
     pub max_sessions_per_region: u32,
     /// Peer ids that are never admitted.
     pub blocked_peers: HashSet<String>,
+    /// Idle-time half-life (days) applied to reputation scores before the
+    /// min-reputation gate: `score * 0.5^(idle/half_life)`. `0` disables
+    /// decay (raw stored score is gated). Default `30`.
+    pub reputation_half_life_days: f64,
 }
 
 impl PolicyConfig {
@@ -60,6 +64,24 @@ impl PolicyConfig {
             None => None,
         };
 
+        let half_life_raw = std::env::var("REPUTATION_DECAY_HALF_LIFE_DAYS")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let reputation_half_life_days = match half_life_raw {
+            Some(raw) => match raw.parse::<f64>() {
+                Ok(v) if v.is_finite() && v >= 0.0 => v,
+                Ok(v) => {
+                    warn!(value = %v, "REPUTATION_DECAY_HALF_LIFE_DAYS must be >= 0; using default 30");
+                    30.0
+                }
+                Err(_) => {
+                    warn!(value = %raw, "unparseable REPUTATION_DECAY_HALF_LIFE_DAYS; using default 30");
+                    30.0
+                }
+            },
+            None => 30.0,
+        };
+
         Self {
             min_reputation: env_f64_clamped("POLICY_MIN_REPUTATION", 0.0),
             max_latency_ms,
@@ -73,6 +95,7 @@ impl PolicyConfig {
                         .collect()
                 })
                 .unwrap_or_default(),
+            reputation_half_life_days,
         }
     }
 
@@ -161,6 +184,30 @@ pub struct PeerFacts {
     pub reputation_score: Option<f64>,
     /// Recorded average RTT; `None`/`0.0` = not recorded (latency gate skipped).
     pub avg_latency_ms: Option<f64>,
+    /// Seconds since the peer was last active (`last_active_at`); `None` =
+    /// unknown recency (reputation treated as fresh for decay purposes).
+    pub idle_secs: Option<u64>,
+}
+
+/// Time-decay a reputation score: `score * 0.5^(idle / half_life)`.
+///
+/// Trust erodes while a peer is idle — a good score from months ago should
+/// count for less than a good score from yesterday. `half_life_days <= 0`
+/// disables decay; unknown idle time is treated as fresh (no decay).
+/// Result is rounded to 4 decimals to keep gate comparisons stable.
+pub fn decay_reputation(score: f64, idle_secs: Option<u64>, half_life_days: f64) -> f64 {
+    if half_life_days.is_nan() || half_life_days <= 0.0 || !score.is_finite() {
+        return score;
+    }
+    let Some(idle) = idle_secs else {
+        return score;
+    };
+    if idle == 0 {
+        return score;
+    }
+    let idle_days = idle as f64 / 86_400.0;
+    let decayed = score * 0.5f64.powf(idle_days / half_life_days);
+    (decayed * 10_000.0).round() / 10_000.0
 }
 
 impl PolicyEngine {
@@ -193,7 +240,10 @@ impl PolicyEngine {
         }
 
         if cfg.min_reputation > 0.0 {
-            let score = facts.reputation_score.unwrap_or(0.0);
+            // Gate against the decayed score: idle trust erodes with a
+            // configurable half-life (`REPUTATION_DECAY_HALF_LIFE_DAYS`).
+            let raw = facts.reputation_score.unwrap_or(0.0);
+            let score = decay_reputation(raw, facts.idle_secs, cfg.reputation_half_life_days);
             if score < cfg.min_reputation {
                 return Err(PolicyViolation::LowReputation {
                     score,
@@ -339,6 +389,15 @@ mod tests {
         PeerFacts {
             reputation_score: reputation,
             avg_latency_ms: latency,
+            idle_secs: None,
+        }
+    }
+
+    fn facts_idle(reputation: Option<f64>, idle_secs: Option<u64>) -> PeerFacts {
+        PeerFacts {
+            reputation_score: reputation,
+            avg_latency_ms: None,
+            idle_secs,
         }
     }
 
@@ -499,5 +558,82 @@ mod tests {
         assert!(PolicyViolation::LowReputation { score: 0.1, min: 0.5 }
             .to_string()
             .contains("0.10"));
+    }
+
+    // ── Trust decay ────────────────────────────────────────────────
+
+    #[test]
+    fn decay_halves_score_after_one_half_life() {
+        assert_eq!(decay_reputation(0.8, Some(30 * 86_400), 30.0), 0.4);
+        assert_eq!(decay_reputation(1.0, Some(60 * 86_400), 30.0), 0.25);
+    }
+
+    #[test]
+    fn decay_disabled_or_fresh_returns_raw_score() {
+        assert_eq!(decay_reputation(0.9, Some(365 * 86_400), 0.0), 0.9, "half-life 0 = off");
+        assert_eq!(decay_reputation(0.9, Some(0), 30.0), 0.9, "no idle = no decay");
+        assert_eq!(decay_reputation(0.9, None, 30.0), 0.9, "unknown idle = treated fresh");
+        assert_eq!(decay_reputation(0.9, Some(10_000_000), f64::NAN), 0.9, "NaN half-life = off");
+    }
+
+    #[test]
+    fn decay_is_monotonic_and_clamped_non_negative() {
+        let d1 = decay_reputation(1.0, Some(86_400), 30.0);
+        let d2 = decay_reputation(1.0, Some(90 * 86_400), 30.0);
+        let d3 = decay_reputation(1.0, Some(10 * 365 * 86_400), 30.0);
+        assert!(d1 > d2 && d2 > d3, "decay must be monotonic: {d1} {d2} {d3}");
+        assert!(d3 >= 0.0);
+        assert!(decay_reputation(0.0, Some(86_400), 30.0) == 0.0);
+    }
+
+    #[test]
+    fn admission_gates_on_decayed_score_not_raw() {
+        // Peer scored 0.9 last month — with a 7-day half-life the gate at
+        // 0.5 must reject it (0.9 * 0.5^(30/7) ≈ 0.17), even though the
+        // raw stored score clears 0.5.
+        let engine = PolicyEngine::new(PolicyConfig {
+            min_reputation: 0.5,
+            reputation_half_life_days: 7.0,
+            ..open_config()
+        });
+        let facts = facts_idle(Some(0.9), Some(30 * 86_400));
+        let err = engine
+            .admit("idle-peer", &facts, "eu")
+            .expect_err("decayed score must gate");
+        match err {
+            PolicyViolation::LowReputation { score, min } => {
+                assert!(score < 0.5, "score {score} should be decayed below {min}");
+                assert_eq!(min, 0.5);
+            }
+            other => panic!("unexpected violation: {other:?}"),
+        }
+
+        // Same peer active yesterday: 0.9 * 0.5^(1/7) ≈ 0.83 > 0.5 → allowed.
+        let fresh = facts_idle(Some(0.9), Some(86_400));
+        let permit = engine
+            .admit("idle-peer", &fresh, "eu")
+            .expect("recent good reputation passes");
+        drop(permit);
+    }
+
+    #[test]
+    fn from_env_parses_policy_and_decay_knobs() {
+        // Consolidated env test (tests run in parallel threads).
+        std::env::set_var("POLICY_MIN_REPUTATION", "0.25");
+        std::env::set_var("POLICY_MAX_SESSIONS_PER_PEER", "3");
+        std::env::set_var("POLICY_BLOCKED_PEERS", "peerX, peerY ,");
+        std::env::set_var("REPUTATION_DECAY_HALF_LIFE_DAYS", "14");
+        let cfg = PolicyConfig::from_env();
+        assert_eq!(cfg.min_reputation, 0.25);
+        assert_eq!(cfg.max_sessions_per_peer, 3);
+        assert!(cfg.blocked_peers.contains("peerX"));
+        assert!(cfg.blocked_peers.contains("peerY"));
+        assert!(!cfg.blocked_peers.contains(""));
+        assert_eq!(cfg.reputation_half_life_days, 14.0);
+        assert!(!cfg.is_open(), "configured gates ⇒ engine active");
+        std::env::remove_var("POLICY_MIN_REPUTATION");
+        std::env::remove_var("POLICY_MAX_SESSIONS_PER_PEER");
+        std::env::remove_var("POLICY_BLOCKED_PEERS");
+        std::env::remove_var("REPUTATION_DECAY_HALF_LIFE_DAYS");
     }
 }

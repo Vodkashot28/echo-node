@@ -148,8 +148,14 @@ sequenceDiagram
 | **MITM prevention** | Static key pinning | Provider's Noise public key verified against DB capability record |
 | **Connection limiting** | Semaphore with RAII permits | `OwnedSemaphorePermit` in `EncryptedTunnelSession` |
 | **Identity protection** | File permissions 0600 | Unix `set_permissions` on identity file after every write |
+| **Identity crash-safety** | Atomic writes + corrupt recovery | temp file → fsync → rename (a kill mid-write never truncates keys); unreadable files preserved as `*.corrupt-<ts>` and regenerated |
 | **API authentication** | Scoped constant-time Bearer tokens | `API_KEYS` (per-key `control`/`settlements` scopes) or legacy `API_KEY` (admin); XOR-based comparison prevents timing side-channels; 401/403 |
 | **Admission policy** | Optional reputation/latency gates + quotas | `POLICY_*` env; RAII permits release slots on drop; all-open by default (engine off hot path) |
+| **Trust decay** | Idle-time reputation half-life | `REPUTATION_DECAY_HALF_LIFE_DAYS` (default 30) — the min-reputation gate scores `raw · 0.5^(idle/half_life)` so stale trust erodes |
+| **Slowloris guard** | Handshake deadline | `TUNNEL_HANDSHAKE_TIMEOUT_MS` (default 10 s) bounds the preamble + every Noise handshake read, and the consumer's dial |
+| **Match filtering** | `/match` hygiene | rejects malformed requests (region caps, sane bandwidth floors), drops self/blocked/full/stale/keyless providers (`MATCH_MAX_STALE_SECS`) |
+| **Body limits** | 16 KiB request cap | all HTTP request bodies capped (control-plane JSON is tiny) |
+| **Security alerts** | Sliding-window burst detector | ≥ `SECURITY_ALERT_THRESHOLD` events in `SECURITY_ALERT_WINDOW_SECS` → `error!` log + `alert_active` in `/status`/`/health` + event ring in `GET /security` |
 | **DHT namespacing** | Network-id prefixed Kademlia protocol | `DHT_NETWORK_ID` isolates swarms (`/<id>/kad/1.0.0`); bootstrap + local-only via `DHT_*` |
 | **Input validation** | Length caps on pre-handshake messages | session_id <= 256 bytes, peer_id <= 512 bytes |
 | **Receipt integrity** | Ed25519 signatures | Provider signs receipts; consumers verify |
@@ -312,17 +318,17 @@ Schema is created and upgraded by versioned SQL migrations (`migrations/{postgre
 ```
 src/
 ├── lib.rs              # MetricsBackend trait (17 methods) + shared base64 utils + constant_time_eq
-├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (1865 lines)
+├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (2134 lines)
 ├── models.rs           # 10 data models (NodeRow, PeerReputation, SettlementRecord, etc.)
-├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, file permissions
+├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, atomic writes + corrupt recovery (340 lines)
 ├── discovery.rs        # libp2p Kademlia DHT swarm, provider discovery (DHT_* env config)
-├── tunnel.rs           # Noise_XX handshake, bidirectional relay, policy admission (1116 lines)
+├── tunnel.rs           # Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission (1206 lines)
 ├── consumer.rs         # Consumer forward listener: local apps → provider tunnel
 ├── meter.rs            # Token bucket, signed receipts, session metering
-├── availability.rs     # Capacity engine, session management
+├── availability.rs     # Capacity engine + EWMA estimator (AVAIL_EWMA_ALPHA), session management (517 lines)
 ├── auth.rs             # Scoped API keys (API_KEYS), require_scope middleware
-├── policy.rs           # Provider admission policy (POLICY_* env): gates, quotas, RAII permits
-├── security.rs         # SecurityCounters — handshake/replay/decrypt/policy/auth/receipt telemetry
+├── policy.rs           # Provider admission policy (POLICY_* env): gates, quotas, RAII permits, trust decay (639 lines)
+├── security.rs         # SecurityCounters — event ring + burst alerts (SECURITY_ALERT_* env), surfaced in /status, /health, /security
 ├── migrator.rs         # Versioned SQL migrations: splitter, apply, schema_migrations
 ├── neon.rs             # PostgreSQL backend (runs migrations/postgres/*.sql)
 ├── settlement.rs       # Payout engine: receipts → idempotent settlement rows (bytes + USD)
@@ -358,6 +364,7 @@ cargo run --release
 | GET | `/health` | None | Health check (healthy/degraded/unhealthy) |
 | POST | `/match` | None | Query providers by region + min bandwidth |
 | POST | `/control` | Bearer (scope `control`) | Start/stop/restart daemon |
+| GET | `/security` | Bearer (scope `control`) | Security snapshot + last 32 security events (newest first) |
 | GET | `/settlements` | Bearer (scope `settlements`) | Payout totals + settled receipts |
 
 Bearer tokens come from `API_KEYS` (scoped) or the legacy `API_KEY`
@@ -403,14 +410,16 @@ startup and is omitted from the JSON until detection lands (never `null`).
     "frame_decrypt_failures": 0,
     "api_auth_failures": 0,
     "policy_rejections": 0,
-    "settlement_anomalies": 0
+    "settlement_anomalies": 0,
+    "alert_active": false
   }
 }
 ```
 The `security` block is the same snapshot embedded in `GET /health`
 (process-lifetime counters: Noise handshake failures, pinned-key mismatches,
 replayed/handshake-msg rejects, transport decrypt failures, API 401/403s,
-policy denials, and unverifiable receipts).
+policy denials, and unverifiable receipts). `alert_active` flips true while
+a burst of security events is inside `SECURITY_ALERT_WINDOW_SECS`.
 
 **POST /match**
 ```json
@@ -466,7 +475,8 @@ See `GAPS.md` for the full integration status.
 | `POLICY_MAX_LATENCY_MS` | `0` | Admission gate: reject peers with higher recorded RTT (0 = off) |
 | `POLICY_MAX_SESSIONS_PER_PEER` | `0` | Quota: concurrent sessions per peer id (0 = off) |
 | `POLICY_MAX_SESSIONS_PER_REGION` | `0` | Quota: concurrent sessions per region (0 = off) |
-| `POLICY_BLOCKED_PEERS` | (unset) | Comma-separated peer ids always rejected |
+| `POLICY_BLOCKED_PEERS` | (unset) | Comma-separated peer ids always rejected (also filtered from `/match`) |
+| `REPUTATION_DECAY_HALF_LIFE_DAYS` | `30` | Idle-time trust decay for the reputation gate (`0` = off) |
 | `DHT_LISTEN_ADDR` | `/ip4/0.0.0.0/tcp/0` | libp2p swarm listen multiaddr |
 | `DHT_BOOTSTRAP_PEERS` | (unset) | Comma-separated multiaddrs, each ending `/p2p/<peer-id>` |
 | `DHT_NETWORK_ID` | `echo` | Namespaces the Kademlia protocol to `/<id>/kad/1.0.0` |
@@ -474,6 +484,11 @@ See `GAPS.md` for the full integration status.
 | `RELAY_TARGET` | `127.0.0.1:80` | Target address for incoming tunnel relay |
 | `TUNNEL_ADDR` | `0.0.0.0:3002` | Tunnel listener bind address |
 | `SETTLEMENT_RATE_USD_PER_GB` | `0.50` | USD payout per GB relayed (accumulated on verified receipts) |
+| `AVAIL_EWMA_ALPHA` | `0.3` | Availability estimator smoothing (0,1]; `1.0` disables smoothing |
+| `MATCH_MAX_STALE_SECS` | `300` | `/match`: drop capability records older than this (`0` = off) |
+| `TUNNEL_HANDSHAKE_TIMEOUT_MS` | `10000` | Handshake deadline for preamble + Noise reads + consumer dial (`0` = off) |
+| `SECURITY_ALERT_THRESHOLD` | `10` | Security events within the window that trip an alert (`0` = off) |
+| `SECURITY_ALERT_WINDOW_SECS` | `60` | Sliding window for the security burst detector |
 | `NODE_MODE` | `provider` | `provider` (serve tunnels, advertise capacity) or `consumer` (dial a provider) |
 | `CONSUMER_LISTEN_ADDR` | `127.0.0.1:3003` | Local address local apps connect to in consumer mode |
 | `PROVIDER_ADDR` | (unset) | Provider's `TUNNEL_ADDR` — required in consumer mode |
@@ -519,19 +534,19 @@ instead (task 9).
 
 | # | Task | Line | Description |
 |---|------|------|-------------|
-| — | **Dashboard Reporter** | 1234 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
-| — | **Public IP detection** | 1430 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
-| 1 | **Tunnel Event Handler** | 1247 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
-| 2 | **Tunnel Listener** | 1313 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
-| 3 | **Discovery Event Loop** | 1386 | Runs libp2p swarm event loop, handles DHT GetProviders/PutRecord results |
-| 4 | **Discovery Event Handler** | 1391 | Processes `DiscoveryEvent::PeerFound/Disconnected/CapabilityPublished` |
-| 5 | **Heartbeat** | 1447 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
-| 6 | **Metric Cleanup** | 1454 | Removes metrics older than 30 days (daily) |
-| 7 | **Capability Publisher** | 1478 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
-| 8 | **Receipt Settlement** | 1531 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
+| — | **Dashboard Reporter** | 1368 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
+| — | **Public IP detection** | 1565 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
+| 1 | **Tunnel Event Handler** | 1381 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
+| 2 | **Tunnel Listener** | 1448 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
+| 3 | **Discovery Event Loop** | 1521 | Runs libp2p swarm event loop, handles DHT GetProviders/PutRecord results |
+| 4 | **Discovery Event Handler** | 1526 | Processes `DiscoveryEvent::PeerFound/Disconnected/CapabilityPublished` |
+| 5 | **Heartbeat** | 1582 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
+| 6 | **Metric Cleanup** | 1589 | Removes metrics older than 30 days (daily) |
+| 7 | **Capability Publisher** | 1613 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
+| 8 | **Receipt Settlement** | 1666 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
 | 9 | **Consumer Listener** | `consumer.rs` (consumer only) | Accepts local app connections on `CONSUMER_LISTEN_ADDR`, dials the provider (`connect_to_provider`), relays app traffic through the Noise tunnel without issuing consumer receipts |
 
-Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1700).
+Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1844).
 
 ## Consumer Mode Quick Start
 
@@ -564,6 +579,10 @@ value must decode to exactly 32 bytes.
 | **Constant-time API key** | Prevents timing attacks on the Bearer token |
 | **Scoped API keys** | `API_KEYS` splits the control plane (`control` vs `settlements`); legacy `API_KEY` stays admin for compatibility |
 | **Opt-in admission policy** | An all-open config keeps `policy` off the relay hot path entirely; enabling any gate activates DB-backed checks |
+| **Atomic identity writes** | temp + fsync + rename: a crash mid-write can never truncate the key file; corrupt files are preserved, not silently destroyed |
+| **Idle-time trust decay** | Reputation gates on a half-life-decayed score so a peer can't coast forever on one old good session |
+| **EWMA availability** | Smooths advertised capacity so single noisy sysinfo samples don't bounce the DHT record |
+| **Security event ring + burst alerts** | Bounded in-memory event log for `GET /security`; windowed threshold turns repeated abuse into one loud `error!` instead of log spam |
 | **Durable telemetry queue** | Frames drop-oldest in memory, back off exponentially on failure, and spill to a disk spool so no heartbeat data is lost across restarts |
 | **Token bucket backpressure** | Sleep-based backpressure is simpler than channel-based flow control |
 | **PeerId-based reputation** | Stable identity across sessions (vs. SocketAddr which changes) |

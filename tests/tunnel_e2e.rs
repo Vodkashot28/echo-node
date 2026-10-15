@@ -89,6 +89,7 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         max_download_mbps: 10.0,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 10_000,
     };
     let (provider_svc, mut provider_events) = TunnelService::new(
         provider_peer_id,
@@ -112,6 +113,7 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         max_download_mbps: provider_svc.relay_config().max_download_mbps,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 10_000,
     };
     let listener_addr = tunnel_addr.clone();
     let listener_task = tokio::spawn(async move {
@@ -139,6 +141,7 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         max_download_mbps: 0.0,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 10_000,
     };
     let (consumer_svc, _consumer_events) = TunnelService::new(
         consumer_peer_id,
@@ -313,5 +316,111 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
     );
 
     // Stop the tunnel listener.
+    listener_task.abort();
+}
+#[tokio::test]
+async fn stalled_handshake_is_timed_out_and_counted() {
+    let dir = TempDir::new().unwrap();
+    let provider =
+        NodeIdentity::load_or_generate(&dir.path().join("provider.json"), "us-test").unwrap();
+    let provider_peer_id: libp2p::PeerId = provider.peer_id_str().parse().unwrap();
+
+    let db_path = format!("sqlite:{}", dir.path().join("slowloris.db").display());
+    let backend = Arc::new(SqliteStore::new(&db_path).await.unwrap());
+    let availability = Arc::new(RwLock::new(AvailabilityEngine::new(100.0, 100.0, 10)));
+    let (metering, _receipt_rx) = MeteringEngine::with_config(provider.clone(), 1, 0);
+
+    // Abuse guard: an aggressive 300ms handshake deadline for the test.
+    let security = Arc::new(SecurityCounters::default());
+    let relay_config = RelayConfig {
+        backend: backend.clone(),
+        metering: metering.clone(),
+        availability: availability.clone(),
+        target_addr: "127.0.0.1:1".to_string(), // never reached
+        local_peer_id: provider.peer_id_str().to_string(),
+        max_upload_mbps: 10.0,
+        max_download_mbps: 10.0,
+        policy: None,
+        security: security.clone(),
+        handshake_timeout_ms: 300,
+    };
+    let (provider_svc, _events) = TunnelService::new(
+        provider_peer_id,
+        metering.clone(),
+        availability.clone(),
+        relay_config,
+        4,
+        provider.noise_secret_key_bytes().to_vec(),
+    );
+
+    let tunnel_addr = format!("127.0.0.1:{}", free_port().await);
+    let accept_config = RelayConfig {
+        backend: provider_svc.relay_config().backend.clone(),
+        metering: provider_svc.relay_config().metering.clone(),
+        availability: provider_svc.relay_config().availability.clone(),
+        target_addr: provider_svc.relay_config().target_addr.clone(),
+        local_peer_id: provider_svc.relay_config().local_peer_id.clone(),
+        max_upload_mbps: provider_svc.relay_config().max_upload_mbps,
+        max_download_mbps: provider_svc.relay_config().max_download_mbps,
+        policy: None,
+        security: provider_svc.relay_config().security.clone(),
+        handshake_timeout_ms: provider_svc.relay_config().handshake_timeout_ms,
+    };
+    let listener_addr = tunnel_addr.clone();
+    let listener_task = tokio::spawn(async move {
+        TunnelService::accept_incoming(
+            &listener_addr,
+            provider_svc.event_tx().clone(),
+            accept_config,
+            provider_svc.conn_semaphore(),
+            provider_svc.static_private_key(),
+        )
+        .await
+        .expect("tunnel listener should bind");
+    });
+
+    // Slowloris client: connect, send a truncated preamble (fewer bytes than
+    // the 2-byte length header), then stall forever.
+    let mut client = None;
+    for attempt in 0..5 {
+        match tokio::net::TcpStream::connect(&tunnel_addr).await {
+            Ok(s) => {
+                client = Some(s);
+                break;
+            }
+            Err(_) => {
+                assert!(attempt < 4, "listener never became reachable");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+    let mut client = client.expect("connect to tunnel listener");
+    client.write_all(&[0x00]).await.unwrap();
+
+    // The provider must drop the connection when the handshake deadline
+    // hits — without the guard this read would hang indefinitely.
+    let mut buf = [0u8; 16];
+    let closed = tokio::time::timeout(Duration::from_secs(3), client.read(&mut buf))
+        .await
+        .expect("stalled handshake must be closed within the deadline");
+    match closed {
+        // Clean FIN or RST (unread bytes) — both are a closed connection.
+        Ok(0) | Err(_) => {}
+        Ok(n) => panic!("unexpected data from provider: {n} bytes"),
+    }
+
+    // Give the accept task a moment to record the failure.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let snap = security.snapshot();
+    assert!(
+        snap.handshake_failures >= 1,
+        "stalled handshake must increment handshake_failures: {snap:?}"
+    );
+    let events = security.recent_events(8);
+    assert!(
+        events.iter().any(|e| e.kind == "handshake_failure"),
+        "event ring should record the stall: {events:?}"
+    );
+
     listener_task.abort();
 }

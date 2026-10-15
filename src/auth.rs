@@ -230,16 +230,22 @@ pub async fn require_scope(
         .and_then(|v| v.strip_prefix("Bearer "));
 
     let Some(token) = token else {
-        gate.security.inc_api_auth_failure();
+        gate.security.inc_api_auth_failure("missing bearer token");
         return unauthorized_response();
     };
 
     match gate.registry.authenticate(token) {
         None => {
-            gate.security.inc_api_auth_failure();
+            gate.security.inc_api_auth_failure("invalid bearer token");
             unauthorized_response()
         }
         Some(identity) if !identity.scopes.grants(gate.required) => {
+            let detail = format!(
+                "key '{}' missing scope {}",
+                identity.name,
+                scope_name(gate.required)
+            );
+            gate.security.inc_api_auth_failure(&detail);
             warn!(
                 key = %identity.name,
                 required = scope_name(gate.required),

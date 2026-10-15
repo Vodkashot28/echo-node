@@ -6,7 +6,7 @@ use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
 use echo_daemon::neon;
 use echo_daemon::policy::{PolicyConfig, PolicyEngine};
-use echo_daemon::security::{SecurityCounters, SecuritySnapshot};
+use echo_daemon::security::{SecurityCounters, SecurityEvent, SecuritySnapshot};
 use echo_daemon::settlement::SettlementEngine;
 use echo_daemon::sqlite_store;
 use echo_daemon::tunnel::TunnelService;
@@ -27,7 +27,7 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
@@ -362,6 +362,15 @@ struct AppState {
     unhealthy_threshold_secs: u64,
     provider_match_limit: i64,
     security: Arc<SecurityCounters>,
+    /// This node's peer id — never advertise itself as a match candidate.
+    local_peer_id: String,
+    /// `POLICY_BLOCKED_PEERS` — also filtered from `/match` results so
+    /// consumers never get pointed at blacklisted providers.
+    blocked_peers: Arc<HashSet<String>>,
+    /// Drop capability records older than this many seconds in `/match`
+    /// (`0` disables). Stale rows advertise capacity the provider may no
+    /// longer have.
+    match_max_stale_secs: u64,
 }
 
 impl MetricsState {
@@ -1032,12 +1041,95 @@ async fn handle_settlements(
     }))
 }
 
+/// Maximum accepted `region` length for `/match` (bytes).
+const MAX_REGION_LEN: usize = 64;
+
+/// Validate a `/match` request before it hits the database.
+/// Rejects empty/oversized/control-char regions and non-finite, negative,
+/// or absurd bandwidth floors.
+fn validate_match_request(req: &MatchRequest) -> Result<(), (StatusCode, String)> {
+    let region = req.region.trim();
+    if region.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "region must not be empty".to_string(),
+        ));
+    }
+    if region.len() > MAX_REGION_LEN {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("region must be at most {MAX_REGION_LEN} bytes"),
+        ));
+    }
+    if region.chars().any(|c| c.is_control()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "region must not contain control characters".to_string(),
+        ));
+    }
+    for (name, value) in [
+        ("min_upload_mbps", req.min_upload_mbps),
+        ("min_download_mbps", req.min_download_mbps),
+    ] {
+        if !value.is_finite() || !(0.0..=1_000_000.0).contains(&value) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("{name} must be finite and within 0..=1000000"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Drop unusable/stale/blacklisted/self capability rows from a match result.
+///
+/// A provider is kept only when it is:
+/// - not this node (self-matches are useless and loop-prone),
+/// - not in `POLICY_BLOCKED_PEERS`,
+/// - not at session capacity (`active >= max`, `max > 0`),
+/// - capable of consumer-mode dialing (non-empty Noise static key for pinning),
+/// - freshly published (age ≤ `max_stale_secs`, `0` disables the check).
+fn filter_match_providers(
+    providers: Vec<echo_daemon::CapabilityDescriptor>,
+    local_peer_id: &str,
+    blocked_peers: &HashSet<String>,
+    now_secs: u64,
+    max_stale_secs: u64,
+) -> Vec<echo_daemon::CapabilityDescriptor> {
+    providers
+        .into_iter()
+        .filter(|p| {
+            if p.peer_id == local_peer_id {
+                return false;
+            }
+            if blocked_peers.contains(&p.peer_id) {
+                return false;
+            }
+            if p.max_sessions > 0 && p.active_sessions >= p.max_sessions {
+                return false;
+            }
+            if p.noise_public_key.is_empty() {
+                return false;
+            }
+            if max_stale_secs > 0 && p.last_updated > 0 {
+                let age = now_secs.saturating_sub(p.last_updated);
+                if age > max_stale_secs {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
 async fn handle_match_providers(
     State(app): State<AppState>,
     Json(req): Json<MatchRequest>,
-) -> Result<Json<MatchResponse>, StatusCode> {
+) -> Result<Json<MatchResponse>, (StatusCode, String)> {
+    validate_match_request(&req)?;
+    let region = req.region.trim().to_string();
     info!(
-        region = %req.region,
+        region = %region,
         min_upload = req.min_upload_mbps,
         min_download = req.min_download_mbps,
         "provider match request"
@@ -1046,7 +1138,7 @@ async fn handle_match_providers(
     match app
         .backend
         .get_capabilities_in_region(
-            &req.region,
+            &region,
             req.min_upload_mbps,
             req.min_download_mbps,
             app.provider_match_limit,
@@ -1054,9 +1146,19 @@ async fn handle_match_providers(
         .await
     {
         Ok(providers) => {
-            let count = providers.len();
+            let filtered = filter_match_providers(
+                providers,
+                &app.local_peer_id,
+                &app.blocked_peers,
+                now_epoch_secs(),
+                app.match_max_stale_secs,
+            );
+            let count = filtered.len();
             info!(count, "provider match completed");
-            Ok(Json(MatchResponse { providers, count }))
+            Ok(Json(MatchResponse {
+                providers: filtered,
+                count,
+            }))
         }
         Err(e) => {
             error!(error = %e, "provider match query failed");
@@ -1068,6 +1170,21 @@ async fn handle_match_providers(
             }))
         }
     }
+}
+
+/// Admin observability: full security snapshot + the most recent security
+/// events (newest first). Gated behind the `control` scope.
+#[derive(Debug, Serialize)]
+struct SecurityReport {
+    snapshot: SecuritySnapshot,
+    recent_events: Vec<SecurityEvent>,
+}
+
+async fn handle_security(State(app): State<AppState>) -> Json<SecurityReport> {
+    Json(SecurityReport {
+        snapshot: app.security.snapshot(),
+        recent_events: app.security.recent_events(32),
+    })
 }
 
 async fn shutdown_signal() {
@@ -1155,20 +1272,32 @@ async fn main() -> Result<()> {
     };
 
     // Step 3: Initialize availability engine
-    let availability = Arc::new(RwLock::new(AvailabilityEngine::new(
-        config.max_upload_mbps,
-        config.max_download_mbps,
-        config.max_sessions,
-    )));
+    // AVAIL_EWMA_ALPHA smooths advertised capacity (0.3 default; 1.0 = raw).
+    let availability = Arc::new(RwLock::new(
+        AvailabilityEngine::new(
+            config.max_upload_mbps,
+            config.max_download_mbps,
+            config.max_sessions,
+        )
+        .with_ewma_alpha(env_f64(
+            "AVAIL_EWMA_ALPHA",
+            echo_daemon::availability::DEFAULT_EWMA_ALPHA,
+        )),
+    ));
 
     // Step 3.5: Security counters (handshake failures, policy denials, …)
     // shared by the tunnel service, auth middleware, and HTTP state.
-    let security = Arc::new(SecurityCounters::default());
+    // `from_env` arms the burst detector (SECURITY_ALERT_* knobs).
+    let security = Arc::new(SecurityCounters::from_env());
 
     // Step 3.6: Provider admission policy (blacklist / reputation / latency /
     // quotas). An entirely-open policy keeps the hot path free of DB lookups
     // (policy stays None); a single constraint activates the engine.
     let policy_config = PolicyConfig::from_env();
+    // The blocked list doubles as a `/match` filter (consumers must never be
+    // pointed at a blacklisted provider) — clone it before the config is
+    // moved into the engine.
+    let blocked_peers = Arc::new(policy_config.blocked_peers.clone());
     let policy = if policy_config.is_open() {
         info!("provider policy engine disabled (no POLICY_* constraints set)");
         None
@@ -1196,6 +1325,10 @@ async fn main() -> Result<()> {
         .peer_id_str()
         .parse()
         .context("failed to parse peer_id")?;
+    // Handshake deadline (ms) — slowloris / stalled-handshake guard for both
+    // the provider accept path and the consumer dial path. 0 disables.
+    let handshake_timeout_ms = env_u64("TUNNEL_HANDSHAKE_TIMEOUT_MS", 10_000);
+
     let relay_config = echo_daemon::tunnel::RelayConfig {
         backend: backend.clone(),
         metering: metering.clone(),
@@ -1206,6 +1339,7 @@ async fn main() -> Result<()> {
         max_download_mbps: config.max_download_mbps,
         policy: policy.clone(),
         security: security.clone(),
+        handshake_timeout_ms,
     };
     let (tunnel_service, mut tunnel_rx) = TunnelService::new(
         local_peer_id,
@@ -1306,6 +1440,7 @@ async fn main() -> Result<()> {
             max_download_mbps: tunnel_service.relay_config().max_download_mbps,
             policy: tunnel_service.relay_config().policy.clone(),
             security: tunnel_service.relay_config().security.clone(),
+            handshake_timeout_ms: tunnel_service.relay_config().handshake_timeout_ms,
         };
         let conn_semaphore = tunnel_service.conn_semaphore();
         let static_private_key = tunnel_service.static_private_key();
@@ -1548,7 +1683,7 @@ async fn main() -> Result<()> {
                                     }
                                 }
                                 Ok(false) => {
-                                    security_clone.inc_settlement_anomaly();
+                                    security_clone.inc_settlement_anomaly(&format!("receipt {}", receipt.receipt_id));
                                     warn!(
                                         receipt = %receipt.receipt_id,
                                         session = %receipt.session_id,
@@ -1556,7 +1691,7 @@ async fn main() -> Result<()> {
                                     );
                                 }
                                 Err(e) => {
-                                    security_clone.inc_settlement_anomaly();
+                                    security_clone.inc_settlement_anomaly(&format!("receipt {}", receipt.receipt_id));
                                     warn!(
                                         receipt = %receipt.receipt_id,
                                         error = %e,
@@ -1591,7 +1726,7 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                     Ok(false) => {
-                                        security_clone.inc_settlement_anomaly();
+                                        security_clone.inc_settlement_anomaly(&format!("receipt {}", receipt.receipt_id));
                                         warn!(
                                             receipt = %receipt.receipt_id,
                                             session = %receipt.session_id,
@@ -1600,7 +1735,7 @@ async fn main() -> Result<()> {
                                         );
                                     }
                                     Err(e) => {
-                                        security_clone.inc_settlement_anomaly();
+                                        security_clone.inc_settlement_anomaly(&format!("receipt {}", receipt.receipt_id));
                                         warn!(
                                             receipt = %receipt.receipt_id,
                                             error = %e,
@@ -1656,6 +1791,7 @@ async fn main() -> Result<()> {
     // gets its own scope gate.
     let control_routes = Router::new()
         .route("/control", post(handle_control))
+        .route("/security", get(handle_security))
         .layer(middleware::from_fn_with_state(
             AuthGate {
                 registry: api_registry.clone(),
@@ -1674,6 +1810,10 @@ async fn main() -> Result<()> {
             require_scope,
         ));
 
+    // Public-API hardening: cap request bodies (all control-plane JSON
+    // payloads are tiny; /match is a few hundred bytes at most).
+    let body_limit = axum::extract::DefaultBodyLimit::max(16 * 1024);
+
     let app = Router::new()
         .route("/metrics", get(handle_metrics))
         .route("/nodes", get(handle_nodes))
@@ -1683,6 +1823,7 @@ async fn main() -> Result<()> {
         .route("/match", post(handle_match_providers))
         .merge(control_routes)
         .layer(cors)
+        .layer(body_limit)
         .with_state(AppState {
             metrics: state,
             backend: backend.clone(),
@@ -1690,6 +1831,9 @@ async fn main() -> Result<()> {
             unhealthy_threshold_secs,
             provider_match_limit: 10,
             security,
+            local_peer_id: identity.peer_id_str().to_string(),
+            blocked_peers,
+            match_max_stale_secs: env_u64("MATCH_MAX_STALE_SECS", 300),
         });
 
     let addr: SocketAddr = config.listen_addr.parse()?;
@@ -1861,5 +2005,130 @@ mod tests {
         assert_eq!(env_bandwidth(key, 100.0), 100.0);
 
         std::env::remove_var(key);
+    }
+
+    // ── Phase 1: public API hardening / provider filtering ────────
+
+    fn req(region: &str, up: f64, down: f64) -> MatchRequest {
+        MatchRequest {
+            region: region.to_string(),
+            min_upload_mbps: up,
+            min_download_mbps: down,
+        }
+    }
+
+    #[test]
+    fn match_request_validation_hardens_input() {
+        // Valid input passes (incl. surrounding whitespace).
+        assert!(validate_match_request(&req(" us-west ", 10.0, 50.0)).is_ok());
+        assert!(validate_match_request(&req("a", 0.0, 0.0)).is_ok());
+
+        // Region: empty / oversized / control characters → 400.
+        assert!(validate_match_request(&req("   ", 0.0, 0.0)).is_err());
+        assert!(validate_match_request(&req(&"x".repeat(65), 0.0, 0.0)).is_err());
+        assert!(validate_match_request(&req("west\u{0007}region", 0.0, 0.0)).is_err());
+
+        // Bandwidth floors: negative / non-finite / absurd → 400.
+        assert!(validate_match_request(&req("eu", -1.0, 0.0)).is_err());
+        assert!(validate_match_request(&req("eu", 0.0, -0.5)).is_err());
+        assert!(validate_match_request(&req("eu", 1_000_001.0, 0.0)).is_err());
+        assert!(validate_match_request(&req("eu", f64::INFINITY, 0.0)).is_err());
+
+        // Rejections carry a 400 status.
+        let (status, msg) = validate_match_request(&req("", 0.0, 0.0)).unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(!msg.is_empty());
+    }
+
+    fn cap(
+        peer_id: &str,
+        last_updated: u64,
+        active_sessions: u32,
+        max_sessions: u32,
+        noise_key: Vec<u8>,
+    ) -> echo_daemon::CapabilityDescriptor {
+        echo_daemon::CapabilityDescriptor {
+            peer_id: peer_id.to_string(),
+            public_key: vec![1, 2, 3],
+            region: "us-west".to_string(),
+            upload_cap_mbps: 100.0,
+            download_cap_mbps: 100.0,
+            avg_latency_ms: 20.0,
+            reputation_score: 0.8,
+            supported_encryption: vec!["noise-xx".to_string()],
+            max_sessions,
+            active_sessions,
+            last_updated,
+            noise_public_key: noise_key,
+        }
+    }
+
+    #[test]
+    fn match_filter_drops_self_blocked_full_stale_and_keyless_providers() {
+        let now = 1_790_000_000u64;
+        let blocked: HashSet<String> = ["bad-peer".to_string()].into_iter().collect();
+        let providers = vec![
+            cap("self-peer", now, 0, 10, vec![9; 32]),
+            cap("bad-peer", now, 0, 10, vec![9; 32]),
+            cap("full-peer", now, 5, 5, vec![9; 32]),
+            cap("stale-peer", now - 400, 0, 10, vec![9; 32]),
+            cap("keyless-peer", now, 0, 10, vec![]),
+            cap("good-peer", now, 3, 10, vec![9; 32]),
+        ];
+
+        let out =
+            filter_match_providers(providers, "self-peer", &blocked, now, 300);
+        let ids: Vec<_> = out.iter().map(|p| p.peer_id.as_str()).collect();
+        assert_eq!(ids, vec!["good-peer"], "only a fresh, dialable, unblocked, non-full non-self provider survives");
+    }
+
+    #[test]
+    fn match_filter_rules_can_be_disabled_or_relaxed() {
+        let now = 1_790_000_000u64;
+        let empty: HashSet<String> = HashSet::new();
+
+        // Stale check disabled (0) → stale provider kept.
+        let out = filter_match_providers(
+            vec![cap("stale-peer", now - 999_999, 0, 10, vec![9; 32])],
+            "self-peer",
+            &empty,
+            now,
+            0,
+        );
+        assert_eq!(out.len(), 1);
+
+        // max_sessions = 0 → treated as "unlimited", never "full".
+        let out = filter_match_providers(
+            vec![cap("zero-max", now, 7, 0, vec![9; 32])],
+            "self-peer",
+            &empty,
+            now,
+            300,
+        );
+        assert_eq!(out.len(), 1);
+
+        // last_updated = 0 (unset) → not judged stale.
+        let out = filter_match_providers(
+            vec![cap("never-set", 0, 0, 10, vec![9; 32])],
+            "self-peer",
+            &empty,
+            now,
+            300,
+        );
+        assert_eq!(out.len(), 1);
+
+        // Future timestamp (clock skew) → age saturates to 0 → kept.
+        let out = filter_match_providers(
+            vec![cap("clock-skew", now + 60, 0, 10, vec![9; 32])],
+            "self-peer",
+            &empty,
+            now,
+            300,
+        );
+        assert_eq!(out.len(), 1);
+
+        // Empty input stays empty.
+        let out = filter_match_providers(vec![], "self-peer", &empty, now, 300);
+        assert!(out.is_empty());
     }
 }

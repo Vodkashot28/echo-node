@@ -111,6 +111,10 @@ pub struct RelayConfig {
     pub policy: Option<Arc<PolicyEngine>>,
     /// Security/health counters (handshake failures, decrypt rejects, …).
     pub security: Arc<SecurityCounters>,
+    /// Handshake deadline in milliseconds (`0` = disabled). Covers the
+    /// pre-handshake preamble and each Noise handshake read — a client that
+    /// connects and then stalls must not hold a session permit forever.
+    pub handshake_timeout_ms: u64,
 }
 
 /// Full accounting for a completed relay session, populated on the provider
@@ -236,10 +240,19 @@ impl TunnelService {
             "establishing encrypted tunnel connection"
         );
 
-        // 2. TCP connect
-        let mut stream = TcpStream::connect(remote_addr)
-            .await
-            .context("failed to connect to provider")?;
+        // 2. TCP connect (dial deadline so a blackholed provider can't pin
+        //    the consumer's connection permit for OS-level minutes)
+        let dial_ms = self.relay_config.handshake_timeout_ms;
+        let mut stream = if dial_ms == 0 {
+            TcpStream::connect(remote_addr)
+                .await
+                .context("failed to connect to provider")?
+        } else {
+            tokio::time::timeout(Duration::from_millis(dial_ms), TcpStream::connect(remote_addr))
+                .await
+                .map_err(|_| anyhow!("dial timeout to provider {remote_addr}"))?
+                .context("failed to connect to provider")?
+        };
 
         // 3. Send session_id + local peer_id (plaintext, before Noise handshake)
         send_session_id(&mut stream, session_id, &self.local_peer_id.to_string()).await?;
@@ -269,7 +282,21 @@ impl TunnelService {
         send_wire_msg(&mut stream, &buf[..len]).await?;
 
         // Msg 2 (Responder → Initiator): <- e, ee, s, es
-        let len = recv_wire_msg(&mut stream, &mut buf).await?;
+        let len = match handshake_read(
+            self.relay_config.handshake_timeout_ms,
+            "provider msg2",
+            recv_wire_msg(&mut stream, &mut buf),
+        )
+        .await
+        {
+            Ok(len) => len,
+            Err(e) => {
+                self.relay_config
+                    .security
+                    .inc_handshake_failure(&format!("msg2 read from {remote_addr}: {e}"));
+                return Err(e);
+            }
+        };
         noise
             .read_message(&buf[..len], &mut [])
             .context("noise msg2 read failed")?;
@@ -280,7 +307,11 @@ impl TunnelService {
             .ok_or_else(|| anyhow!("responder failed to provide static public key"))?;
 
         if remote_static != expected_provider_noise_pubkey {
-            self.relay_config.security.inc_invalid_key_rejection();
+            self.relay_config.security.inc_invalid_key_rejection(&format!(
+                "provider {remote_peer_id} at {remote_addr} (expected {} bytes, got {} bytes)",
+                expected_provider_noise_pubkey.len(),
+                remote_static.len()
+            ));
             bail!(
                 "MITM detected: remote noise public key does not match discovery record \
                  (expected {} bytes, got {} bytes)",
@@ -454,6 +485,7 @@ impl TunnelService {
                 max_download_mbps: config.max_download_mbps,
                 policy: config.policy.clone(),
                 security: config.security.clone(),
+                handshake_timeout_ms: config.handshake_timeout_ms,
             };
             let sem = Arc::clone(&conn_semaphore);
             let sk = static_private_key.clone();
@@ -502,10 +534,19 @@ impl TunnelService {
         // and the session_id is not secret (it's just a binding value).
 
         // Read session_id and peer_id from consumer (plaintext, before Noise handshake)
-        let (session_id, remote_peer_id_str) = match recv_session_and_peer_id(&mut stream).await {
+        let hs_ms = config.handshake_timeout_ms;
+        let (session_id, remote_peer_id_str) = match handshake_read(
+            hs_ms,
+            "session preamble",
+            recv_session_and_peer_id(&mut stream),
+        )
+        .await
+        {
             Ok(v) => v,
             Err(e) => {
-                config.security.inc_handshake_failure();
+                config
+                    .security
+                    .inc_handshake_failure(&format!("preamble read from {addr}: {e}"));
                 return Err(e);
             }
         };
@@ -531,16 +572,22 @@ impl TunnelService {
         let mut buf = [0u8; NOISE_MAX_MSG_LEN];
 
         // Msg 1 (Initiator → Responder): -> e
-        let len = match recv_wire_msg(&mut stream, &mut buf).await {
+        let len = match handshake_read(hs_ms, "noise msg1", recv_wire_msg(&mut stream, &mut buf))
+            .await
+        {
             Ok(len) => len,
             Err(e) => {
-                config.security.inc_handshake_failure();
+                config
+                    .security
+                    .inc_handshake_failure(&format!("msg1 read from {addr}: {e}"));
                 return Err(e);
             }
         };
         if let Err(e) = noise.read_message(&buf[..len], &mut []) {
             // Invalid/replayed handshake message (fails Noise authentication).
-            config.security.inc_replay_attempt();
+            config
+                .security
+                .inc_replay_attempt(&format!("msg1 rejected from {addr}: {e}"));
             return Err(e).context("noise msg1 read failed");
         }
 
@@ -548,26 +595,36 @@ impl TunnelService {
         let len = match noise.write_message(&[], &mut buf) {
             Ok(len) => len,
             Err(e) => {
-                config.security.inc_handshake_failure();
+                config
+                    .security
+                    .inc_handshake_failure(&format!("msg2 write for {addr}: {e}"));
                 return Err(e).context("noise msg2 write failed");
             }
         };
         if let Err(e) = send_wire_msg(&mut stream, &buf[..len]).await {
-            config.security.inc_handshake_failure();
+            config
+                .security
+                .inc_handshake_failure(&format!("msg2 send to {addr}: {e}"));
             return Err(e);
         }
 
         // Msg 3 (Initiator → Responder): -> s, se
-        let len = match recv_wire_msg(&mut stream, &mut buf).await {
+        let len = match handshake_read(hs_ms, "noise msg3", recv_wire_msg(&mut stream, &mut buf))
+            .await
+        {
             Ok(len) => len,
             Err(e) => {
-                config.security.inc_handshake_failure();
+                config
+                    .security
+                    .inc_handshake_failure(&format!("msg3 read from {addr}: {e}"));
                 return Err(e);
             }
         };
         if let Err(e) = noise.read_message(&buf[..len], &mut []) {
             // Invalid/replayed handshake message (fails Noise authentication).
-            config.security.inc_replay_attempt();
+            config
+                .security
+                .inc_replay_attempt(&format!("msg3 rejected from {addr}: {e}"));
             return Err(e).context("noise msg3 read failed");
         }
 
@@ -575,7 +632,9 @@ impl TunnelService {
         let transport = match noise.into_transport_mode() {
             Ok(transport) => transport,
             Err(e) => {
-                config.security.inc_handshake_failure();
+                config
+                    .security
+                    .inc_handshake_failure(&format!("transport transition for {addr}: {e}"));
                 return Err(e).context("failed to transition to transport mode");
             }
         };
@@ -604,14 +663,26 @@ impl TunnelService {
                     .flatten()
                     .map(|c| c.region)
                     .unwrap_or_default();
+                // Recency for trust decay: seconds since `last_active_at`.
+                let idle_secs = reputation
+                    .as_ref()
+                    .and_then(|r| r.last_active_at.as_deref())
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| {
+                        let dt = dt.with_timezone(&chrono::Utc);
+                        (chrono::Utc::now() - dt).num_seconds().max(0) as u64
+                    });
                 let facts = PeerFacts {
                     reputation_score: reputation.as_ref().map(|r| r.reputation_score),
                     avg_latency_ms: reputation.as_ref().map(|r| r.avg_latency_ms),
+                    idle_secs,
                 };
                 match policy.admit(&remote_peer_id_str, &facts, &region) {
                     Ok(permit) => Some(permit),
                     Err(violation) => {
-                        config.security.inc_policy_rejection();
+                        config.security.inc_policy_rejection(&format!(
+                            "peer {remote_peer_id_str}: {violation}"
+                        ));
                         warn!(
                             session = %session_id,
                             peer = %remote_peer_id_str,
@@ -898,7 +969,9 @@ impl TunnelService {
                             // AEAD reject: the frame failed authentication —
                             // corruption, tampering, or replay (snow collapses
                             // all three into Error::Decrypt).
-                            security.inc_frame_decrypt_failure();
+                            security.inc_frame_decrypt_failure(&format!(
+                                "egress frame (session {sid_e}): {e}"
+                            ));
                             warn!(session = %sid_e, error = %e, "noise decrypt failed");
                             break;
                         }
@@ -983,6 +1056,23 @@ async fn send_wire_msg(stream: &mut TcpStream, msg: &[u8]) -> Result<()> {
     stream.write_all(&len.to_be_bytes()).await?;
     stream.write_all(msg).await?;
     Ok(())
+}
+
+/// Apply the handshake deadline to a read future (`timeout_ms == 0` = off).
+///
+/// Abuse guard: a peer that completes the TCP connect and then sends
+/// nothing (slowloris) would otherwise pin a connection permit forever.
+async fn handshake_read<T>(
+    timeout_ms: u64,
+    what: &str,
+    fut: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    if timeout_ms == 0 {
+        return fut.await;
+    }
+    tokio::time::timeout(Duration::from_millis(timeout_ms), fut)
+        .await
+        .map_err(|_| anyhow!("handshake timeout waiting for {what}"))?
 }
 
 /// Receive a length-prefixed message (2-byte big-endian header).
