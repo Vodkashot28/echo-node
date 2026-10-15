@@ -1,9 +1,12 @@
+use echo_daemon::auth::{require_scope, ApiKeyRegistry, AuthGate, Scope};
 use echo_daemon::availability::AvailabilityEngine;
 use echo_daemon::consumer::run_consumer_listener;
-use echo_daemon::discovery::DiscoveryService;
+use echo_daemon::discovery::{DiscoveryConfig, DiscoveryService};
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
 use echo_daemon::neon;
+use echo_daemon::policy::{PolicyConfig, PolicyEngine};
+use echo_daemon::security::{SecurityCounters, SecuritySnapshot};
 use echo_daemon::settlement::SettlementEngine;
 use echo_daemon::sqlite_store;
 use echo_daemon::tunnel::TunnelService;
@@ -17,13 +20,11 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{Json, State},
     http::StatusCode,
-    middleware::{self, Next},
-    response::{IntoResponse, Response},
+    middleware,
     routing::{get, post},
     Router,
 };
 use chrono::Utc;
-use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -100,7 +101,6 @@ struct Config {
     settlement_rate_usd_per_gb: f64,
     identity_path: PathBuf,
     database_url: Option<String>,
-    api_key: Option<String>,
     cors_origins: Option<String>,
     neon_max_connections: u32,
     neon_acquire_timeout_secs: u64,
@@ -136,8 +136,8 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect(),
-            max_upload_mbps: env_f64("MAX_UPLOAD_MBPS", 100.0),
-            max_download_mbps: env_f64("MAX_DOWNLOAD_MBPS", 100.0),
+            max_upload_mbps: env_bandwidth("MAX_UPLOAD_MBPS", 100.0),
+            max_download_mbps: env_bandwidth("MAX_DOWNLOAD_MBPS", 100.0),
             max_sessions: env_u32("MAX_SESSIONS", 10),
             heartbeat_secs: env_u64("HEARTBEAT_SECS", DEFAULT_HEARTBEAT_SECS),
             metrics_window: env_usize("METRICS_WINDOW", DEFAULT_METRICS_WINDOW),
@@ -153,7 +153,6 @@ impl Config {
                 std::env::var("IDENTITY_PATH").unwrap_or_else(|_| "data/identity.json".to_string()),
             ),
             database_url: std::env::var("DATABASE_URL").ok().filter(|v| !v.is_empty()),
-            api_key: std::env::var("API_KEY").ok().filter(|v| !v.is_empty()),
             cors_origins: std::env::var("CORS_ORIGINS").ok().filter(|v| !v.is_empty()),
             neon_max_connections: env_u32("NEON_MAX_CONNECTIONS", 5),
             neon_acquire_timeout_secs: env_u64("NEON_ACQUIRE_TIMEOUT_SECS", 10),
@@ -175,6 +174,28 @@ impl Config {
 fn env_f64(key: &str, default: f64) -> f64 {
     std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
+
+/// Parse a bandwidth/capacity env var (Mbps). Unset → `default` (silent).
+/// A value that parses but is zero, negative, or non-finite falls back to
+/// `default` with a warning: the token-bucket rate limiter divides by the
+/// refill rate when computing backpressure sleeps, and a zero capacity
+/// would stall or disable the relay in surprising ways.
+fn env_bandwidth(key: &str, default: f64) -> f64 {
+    match std::env::var(key) {
+        Err(_) => default,
+        Ok(raw) => match raw.parse::<f64>() {
+            Ok(v) if v.is_finite() && v > 0.0 => v,
+            Ok(v) => {
+                warn!(key, value = %v, default, "invalid bandwidth setting (must be > 0); using default");
+                default
+            }
+            Err(_) => {
+                warn!(key, value = %raw, default, "unparseable bandwidth setting; using default");
+                default
+            }
+        },
+    }
+}
 fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -186,20 +207,6 @@ fn env_u32(key: &str, default: u32) -> u32 {
 }
 fn env_usize(key: &str, default: usize) -> usize {
     std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
-}
-
-/// Constant-time byte-string comparison to prevent timing side-channel attacks.
-/// Returns `true` if `a` and `b` have the same length and every byte is equal,
-/// without early-exiting on the first mismatch.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,6 +278,8 @@ pub struct DaemonStatus {
     pub last_heartbeat: Option<u64>,
     pub db_connected: bool,
     pub active_sessions: u32,
+    /// Security/health counters (handshake failures, policy denials, …).
+    pub security: SecuritySnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,6 +304,8 @@ struct HealthResponse {
     active_sessions: u32,
     available_upload_mbps: f64,
     available_download_mbps: f64,
+    /// Security/health counters (see `/status` for field semantics).
+    security: SecuritySnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,41 +313,6 @@ pub struct MatchRequest {
     pub region: String,
     pub min_upload_mbps: f64,
     pub min_download_mbps: f64,
-}
-
-#[derive(Clone)]
-struct ApiKeyAuth {
-    key: Option<String>,
-}
-
-impl ApiKeyAuth {
-    fn new(key: Option<String>) -> Self {
-        Self { key }
-    }
-
-    /// Middleware: verify `Authorization: Bearer <key>` header.
-    /// If no API_KEY is configured, all requests are allowed through.
-    /// Uses constant-time comparison to prevent timing side-channel attacks.
-    async fn verify(&self, req: axum::http::Request<axum::body::Body>, next: Next) -> Response {
-        match &self.key {
-            None => next.run(req).await,
-            Some(expected) => {
-                let authorized = req
-                    .headers()
-                    .get(axum::http::header::AUTHORIZATION)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.strip_prefix("Bearer "))
-                    .map(|token| constant_time_eq(token.as_bytes(), expected.as_bytes()))
-                    .unwrap_or(false);
-
-                if authorized {
-                    next.run(req).await
-                } else {
-                    (StatusCode::UNAUTHORIZED, "missing or invalid API key").into_response()
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,6 +361,7 @@ struct AppState {
     settlement: SettlementEngine,
     unhealthy_threshold_secs: u64,
     provider_match_limit: i64,
+    security: Arc<SecurityCounters>,
 }
 
 impl MetricsState {
@@ -920,6 +897,7 @@ async fn handle_status(
         last_heartbeat: st.last_heartbeat_ts,
         db_connected: st.db_connected,
         active_sessions: st.system_stats.active_sessions,
+        security: app.security.snapshot(),
     })
 }
 
@@ -943,6 +921,7 @@ async fn handle_control(
                     last_heartbeat: st.last_heartbeat_ts,
                     db_connected: st.db_connected,
                     active_sessions: st.system_stats.active_sessions,
+                    security: app.security.snapshot(),
                 },
             }
         }
@@ -960,6 +939,7 @@ async fn handle_control(
                     last_heartbeat: st.last_heartbeat_ts,
                     db_connected: st.db_connected,
                     active_sessions: 0,
+                    security: app.security.snapshot(),
                 },
             }
         }
@@ -982,6 +962,7 @@ async fn handle_control(
                     last_heartbeat: None,
                     db_connected: st.db_connected,
                     active_sessions: 0,
+                    security: app.security.snapshot(),
                 },
             }
         }
@@ -1022,6 +1003,7 @@ async fn handle_health(
         active_sessions: st.system_stats.active_sessions,
         available_upload_mbps: metrics.map_or(0.0, |m| m.available_upload_mbps),
         available_download_mbps: metrics.map_or(0.0, |m| m.available_download_mbps),
+        security: app.security.snapshot(),
     })
 }
 
@@ -1179,6 +1161,29 @@ async fn main() -> Result<()> {
         config.max_sessions,
     )));
 
+    // Step 3.5: Security counters (handshake failures, policy denials, …)
+    // shared by the tunnel service, auth middleware, and HTTP state.
+    let security = Arc::new(SecurityCounters::default());
+
+    // Step 3.6: Provider admission policy (blacklist / reputation / latency /
+    // quotas). An entirely-open policy keeps the hot path free of DB lookups
+    // (policy stays None); a single constraint activates the engine.
+    let policy_config = PolicyConfig::from_env();
+    let policy = if policy_config.is_open() {
+        info!("provider policy engine disabled (no POLICY_* constraints set)");
+        None
+    } else {
+        info!(
+            min_reputation = policy_config.min_reputation,
+            max_latency_ms = ?policy_config.max_latency_ms,
+            max_sessions_per_peer = policy_config.max_sessions_per_peer,
+            max_sessions_per_region = policy_config.max_sessions_per_region,
+            blocked_peers = policy_config.blocked_peers.len(),
+            "provider policy engine enabled"
+        );
+        Some(PolicyEngine::new(policy_config))
+    };
+
     // Step 4: Initialize metering engine
     let (metering, receipt_rx) = MeteringEngine::with_config(
         identity.clone(),
@@ -1199,6 +1204,8 @@ async fn main() -> Result<()> {
         local_peer_id: identity.peer_id_str().to_string(),
         max_upload_mbps: config.max_upload_mbps,
         max_download_mbps: config.max_download_mbps,
+        policy: policy.clone(),
+        security: security.clone(),
     };
     let (tunnel_service, mut tunnel_rx) = TunnelService::new(
         local_peer_id,
@@ -1297,6 +1304,8 @@ async fn main() -> Result<()> {
             local_peer_id: tunnel_service.relay_config().local_peer_id.clone(),
             max_upload_mbps: tunnel_service.relay_config().max_upload_mbps,
             max_download_mbps: tunnel_service.relay_config().max_download_mbps,
+            policy: tunnel_service.relay_config().policy.clone(),
+            security: tunnel_service.relay_config().security.clone(),
         };
         let conn_semaphore = tunnel_service.conn_semaphore();
         let static_private_key = tunnel_service.static_private_key();
@@ -1352,12 +1361,12 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Step 5: Initialize discovery (libp2p swarm)
-    let discovery_listen: Multiaddr = "/ip4/0.0.0.0/tcp/0".parse()?;
+    // Step 5: Initialize discovery (libp2p swarm) — DHT_* env config:
+    // bootstrap peers, network id namespace, optional local-only dev mode.
+    let discovery_config = DiscoveryConfig::from_env();
     let (mut discovery, mut discovery_rx) = DiscoveryService::new(
         &identity,
-        discovery_listen,
-        vec![],
+        &discovery_config,
     )
     .await
     .map_err(|e| {
@@ -1365,7 +1374,13 @@ async fn main() -> Result<()> {
         anyhow::anyhow!("discovery init failed: {}", e)
     })?;
 
-    info!(peer_id = %identity.peer_id_str(), "discovery initialized");
+    info!(
+        peer_id = %identity.peer_id_str(),
+        network_id = %discovery_config.network_id,
+        local_only = discovery_config.local_only,
+        bootstrap_peers = discovery_config.bootstrap.len(),
+        "discovery initialized"
+    );
 
     // Spawn discovery event loop
     tokio::spawn(async move {
@@ -1512,6 +1527,7 @@ async fn main() -> Result<()> {
         let receipt_backend = backend.clone();
         let receipt_signer_key = identity.public_key_bytes.clone();
         let receipt_settlement = settlement_engine.clone();
+        let security_clone = security.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -1532,6 +1548,7 @@ async fn main() -> Result<()> {
                                     }
                                 }
                                 Ok(false) => {
+                                    security_clone.inc_settlement_anomaly();
                                     warn!(
                                         receipt = %receipt.receipt_id,
                                         session = %receipt.session_id,
@@ -1539,6 +1556,7 @@ async fn main() -> Result<()> {
                                     );
                                 }
                                 Err(e) => {
+                                    security_clone.inc_settlement_anomaly();
                                     warn!(
                                         receipt = %receipt.receipt_id,
                                         error = %e,
@@ -1573,6 +1591,7 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                     Ok(false) => {
+                                        security_clone.inc_settlement_anomaly();
                                         warn!(
                                             receipt = %receipt.receipt_id,
                                             session = %receipt.session_id,
@@ -1581,6 +1600,7 @@ async fn main() -> Result<()> {
                                         );
                                     }
                                     Err(e) => {
+                                        security_clone.inc_settlement_anomaly();
                                         warn!(
                                             receipt = %receipt.receipt_id,
                                             error = %e,
@@ -1624,22 +1644,35 @@ async fn main() -> Result<()> {
             .allow_headers(Any)
     };
 
-    // API key for /control endpoint (optional — if unset, auth is disabled)
-    if config.api_key.is_some() {
-        info!("API key authentication enabled for /control");
-    } else {
-        info!("API key authentication disabled (set API_KEY env var to enable)");
+    // Scoped API keys (API_KEYS JSON + legacy API_KEY). Empty registry →
+    // auth disabled (open control plane, the historical default).
+    let api_registry = Arc::new(ApiKeyRegistry::from_env());
+    if api_registry.is_empty() {
+        info!("API key authentication disabled (set API_KEY or API_KEYS env var to enable)");
     }
-    let auth = ApiKeyAuth::new(config.api_key.clone());
 
-    // /control and /settlements are protected by API key middleware
+    // /control and /settlements are protected by scoped API key middleware.
+    // `.layer` applies to routes registered before it, so each route group
+    // gets its own scope gate.
     let control_routes = Router::new()
         .route("/control", post(handle_control))
+        .layer(middleware::from_fn_with_state(
+            AuthGate {
+                registry: api_registry.clone(),
+                required: Scope::Control,
+                security: security.clone(),
+            },
+            require_scope,
+        ))
         .route("/settlements", get(handle_settlements))
-        .layer(middleware::from_fn(move |req, next| {
-            let auth = auth.clone();
-            async move { auth.verify(req, next).await }
-        }));
+        .layer(middleware::from_fn_with_state(
+            AuthGate {
+                registry: api_registry.clone(),
+                required: Scope::Settlements,
+                security: security.clone(),
+            },
+            require_scope,
+        ));
 
     let app = Router::new()
         .route("/metrics", get(handle_metrics))
@@ -1656,6 +1689,7 @@ async fn main() -> Result<()> {
             settlement: settlement_engine,
             unhealthy_threshold_secs,
             provider_match_limit: 10,
+            security,
         });
 
     let addr: SocketAddr = config.listen_addr.parse()?;
@@ -1673,6 +1707,13 @@ async fn main() -> Result<()> {
         sleep(Duration::from_secs(1)).await;
     }
 
+    // Time-boxed final dashboard telemetry flush; unsent frames are spooled
+    // to disk and replayed on the next boot.
+    if let Some(reporter) = &reporter {
+        reporter.shutdown();
+        sleep(Duration::from_secs(1)).await;
+    }
+
     info!("shutdown complete");
     Ok(())
 }
@@ -1680,6 +1721,7 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use echo_daemon::constant_time_eq;
 
     #[test]
     fn constant_time_eq_same_bytes() {
@@ -1791,5 +1833,33 @@ mod tests {
         // garbled value must not panic; falls through to later lines/None
         let out = "weird time=abc ms\n64 bytes from 1.1.1.1: icmp_seq=2 time=55.5 ms\n";
         assert_eq!(parse_ping_rtt_ms(out), Some(55.5));
+    }
+
+    #[test]
+    fn env_bandwidth_sanitizes_invalid_values() {
+        // Unique key so this test never touches real daemon config.
+        let key = "ECHO_TEST_BANDWIDTH_ENV";
+
+        // Unset → default, silently.
+        std::env::remove_var(key);
+        assert_eq!(env_bandwidth(key, 100.0), 100.0);
+
+        // Valid values pass through.
+        std::env::set_var(key, "42.5");
+        assert_eq!(env_bandwidth(key, 100.0), 42.5);
+
+        // Zero / negative / non-finite / unparseable → default.
+        std::env::set_var(key, "0");
+        assert_eq!(env_bandwidth(key, 100.0), 100.0);
+        std::env::set_var(key, "-3.0");
+        assert_eq!(env_bandwidth(key, 100.0), 100.0);
+        std::env::set_var(key, "nan");
+        assert_eq!(env_bandwidth(key, 100.0), 100.0);
+        std::env::set_var(key, "inf");
+        assert_eq!(env_bandwidth(key, 100.0), 100.0);
+        std::env::set_var(key, "not-a-number");
+        assert_eq!(env_bandwidth(key, 100.0), 100.0);
+
+        std::env::remove_var(key);
     }
 }

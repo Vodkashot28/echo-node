@@ -16,6 +16,7 @@ use echo_daemon::consumer::{run_consumer_listener, ConsumerConfig};
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
 use echo_daemon::sqlite_store::SqliteStore;
+use echo_daemon::security::SecurityCounters;
 use echo_daemon::tunnel::{RelayConfig, TunnelService};
 use std::sync::Arc;
 use std::time::Duration;
@@ -110,6 +111,8 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
         local_peer_id: provider.peer_id_str().to_string(),
         max_upload_mbps: 10.0,
         max_download_mbps: 10.0,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
     };
     let (provider_svc, _provider_events) = TunnelService::new(
         provider_peer_id,
@@ -130,6 +133,8 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
         local_peer_id: provider_svc.relay_config().local_peer_id.clone(),
         max_upload_mbps: provider_svc.relay_config().max_upload_mbps,
         max_download_mbps: provider_svc.relay_config().max_download_mbps,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
     };
     let listener_addr = tunnel_addr.clone();
     let listener_task = tokio::spawn(async move {
@@ -159,6 +164,8 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
         local_peer_id: consumer.peer_id_str().to_string(),
         max_upload_mbps: 10.0,
         max_download_mbps: 10.0,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
     };
     let (consumer_svc, _consumer_events) = TunnelService::new(
         consumer.peer_id_str().parse::<libp2p::PeerId>().unwrap(),

@@ -476,6 +476,36 @@ impl MetricsBackend for SqliteStore {
             .collect())
     }
 
+    async fn get_capability_for_peer(&self, peer_id: &str) -> Result<Option<CapabilityDescriptor>> {
+        let row: Option<(
+            String, Vec<u8>, String, f64, f64, f64, f64, String, i32, i32, i64, Vec<u8>,
+        )> = sqlx::query_as(
+            "SELECT peer_id, public_key, region, upload_cap_mbps, download_cap_mbps,
+             avg_latency_ms, reputation_score, supported_encryption, max_sessions,
+             active_sessions, last_updated, noise_public_key
+             FROM capability_descriptors
+             WHERE peer_id = ?",
+        )
+        .bind(peer_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("sqlite get capability for peer")?;
+        Ok(row.map(|r| CapabilityDescriptor {
+            peer_id: r.0,
+            public_key: r.1,
+            region: r.2,
+            upload_cap_mbps: r.3,
+            download_cap_mbps: r.4,
+            avg_latency_ms: r.5,
+            reputation_score: r.6,
+            supported_encryption: serde_json::from_str(&r.7).unwrap_or_default(),
+            max_sessions: r.8 as u32,
+            active_sessions: r.9 as u32,
+            last_updated: r.10 as u64,
+            noise_public_key: r.11,
+        }))
+    }
+
     async fn record_settlement(&self, record: &SettlementRecord) -> Result<bool> {
         // Idempotent per-receipt: returns `false` when the receipt was
         // already settled (INSERT OR IGNORE skips the duplicate).

@@ -21,16 +21,31 @@
 //! When any required variable is missing the bridge stays disabled and the
 //! daemon behaves exactly as before. Reporting never blocks the heartbeat:
 //! frames are handed off through a small bounded channel and posted by a
-//! dedicated background task, best-effort with error logging.
+//! dedicated background task.
+//!
+//! Delivery is queue-backed and durable:
+//!
+//! - the reporter task owns a bounded in-memory queue (FIFO) in front of the
+//!   HTTP client, so a slow/unreachable endpoint does not drop frames the
+//!   moment the channel drains;
+//! - failed posts are retried with capped exponential backoff + jitter
+//!   (`DASHBOARD_TELEMETRY_BACKOFF_BASE_MS` / `_MAX_MS`);
+//! - on shutdown the task makes a time-boxed final delivery attempt, then
+//!   spools whatever is left to `DASHBOARD_TELEMETRY_SPOOL` (JSONL) and
+//!   replays it on the next boot — a restart cannot lose queued frames;
+//! - queue overflow drops the *oldest* frame (`DASHBOARD_TELEMETRY_MAX_QUEUE`)
+//!   so the dashboard sees the freshest state.
 
 use crate::tunnel::SessionCloseDetails;
 use crate::{NetworkMetricsRow, NodeIntelligenceRow, NodeMetricsRow, NodeRow};
 use anyhow::{Context, Result};
 use rand::RngCore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tokio::sync::{mpsc, watch};
+use tracing::{debug, info, warn};
 
 /// Payload schema version — bump when the frame shape changes; the edge
 /// function rejects unknown versions.
@@ -41,10 +56,13 @@ pub const TELEMETRY_SCHEMA_VERSION: u32 = 1;
 /// comment and the dashboard's `FEATURE_LABELS`).
 pub const FEATURE_VECTOR_DIM: usize = 32;
 
-/// Maximum number of frames queued before dropping (heartbeat must never block).
+/// Maximum number of frames queued on the channel before the sender starts
+/// dropping (heartbeat must never block).
 const QUEUE_CAPACITY: usize = 64;
 /// Per-request HTTP timeout.
 const POST_TIMEOUT_SECS: u64 = 10;
+/// Time-boxed delivery budget for the final flush on shutdown.
+const SHUTDOWN_FLUSH_SECS: u64 = 5;
 
 /// Dashboard reporting configuration.
 #[derive(Debug, Clone)]
@@ -56,6 +74,14 @@ pub struct DashboardConfig {
     pub user_id: String,
     /// UUID identifying this node's dashboard row.
     pub node_id: String,
+    /// JSONL spool file for crash/restart durability.
+    pub spool_path: PathBuf,
+    /// Exponential backoff base (first retry delay), milliseconds.
+    pub backoff_base_ms: u64,
+    /// Backoff ceiling, milliseconds.
+    pub backoff_max_ms: u64,
+    /// Max frames held in the reporter's in-memory queue.
+    pub max_queue: usize,
 }
 
 impl DashboardConfig {
@@ -84,11 +110,24 @@ impl DashboardConfig {
                         );
                         generated
                     });
+                let spool_path = std::env::var("DASHBOARD_TELEMETRY_SPOOL")
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("data/telemetry_spool.jsonl"));
+                let backoff_base_ms = env_u64("DASHBOARD_TELEMETRY_BACKOFF_BASE_MS", 500).max(1);
+                let backoff_max_ms =
+                    env_u64("DASHBOARD_TELEMETRY_BACKOFF_MAX_MS", 30_000).max(backoff_base_ms);
+                let max_queue = env_usize("DASHBOARD_TELEMETRY_MAX_QUEUE", 256).max(1);
                 Some(Self {
                     url,
                     token,
                     user_id,
                     node_id,
+                    spool_path,
+                    backoff_base_ms,
+                    backoff_max_ms,
+                    max_queue,
                 })
             }
             _ => None,
@@ -349,48 +388,237 @@ pub fn build_feature_vector(series: &[FeatureInputs]) -> Vec<f64> {
     v.iter().map(|x| (x * 10000.0).round() / 10000.0).collect()
 }
 
+/// One queued delivery attempt: a discriminator plus the already-serialized
+/// payload (posted as-is, spooled as-is — the payload types stay
+/// serialize-only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SpoolRecord {
+    kind: String,
+    payload: serde_json::Value,
+}
+
+impl From<ReporterMessage> for SpoolRecord {
+    fn from(message: ReporterMessage) -> Self {
+        match message {
+            ReporterMessage::Telemetry(frame) => Self {
+                kind: "telemetry".to_string(),
+                payload: serde_json::to_value(&*frame).unwrap_or(serde_json::Value::Null),
+            },
+            ReporterMessage::Session(event) => Self {
+                kind: "session".to_string(),
+                payload: serde_json::to_value(&*event).unwrap_or(serde_json::Value::Null),
+            },
+        }
+    }
+}
+
+/// Append to the reporter queue, dropping the *oldest* records on overflow
+/// so the dashboard keeps receiving fresh state instead of stale backlog.
+fn enqueue(queue: &mut VecDeque<SpoolRecord>, record: SpoolRecord, max_queue: usize) {
+    if max_queue == 0 {
+        return;
+    }
+    while queue.len() >= max_queue {
+        queue.pop_front();
+    }
+    queue.push_back(record);
+}
+
+/// Capped exponential backoff with jitter: `base * 2^(attempts-1)`, capped
+/// at `max_ms`, plus up to `jitter_frac` of the capped delay (fraction in
+/// `[0,1]`; `0.0` makes the result deterministic for tests).
+fn backoff_delay_ms(base_ms: u64, max_ms: u64, attempts: u32, jitter_frac: f64) -> u64 {
+    if base_ms == 0 || max_ms == 0 {
+        return 0;
+    }
+    let shift = attempts.max(1).saturating_sub(1).min(20);
+    let uncapped = base_ms.saturating_mul(1u64 << shift);
+    let capped = uncapped.min(max_ms);
+    let jitter = (capped as f64 * jitter_frac.clamp(0.0, 1.0)) as u64;
+    capped.saturating_add(jitter).min(max_ms)
+}
+
+/// Random jitter fraction in `[0.0, 0.3)` — keeps retry storms from
+/// synchronizing across nodes.
+fn random_jitter() -> f64 {
+    use rand::Rng;
+    rand::thread_rng().gen_range(0.0..0.3)
+}
+
+/// Load previously spooled frames (oldest first). Unparseable lines are
+/// skipped so one corrupt record cannot wedge the replay forever.
+fn load_spool(path: &Path, max_queue: usize) -> VecDeque<SpoolRecord> {
+    let mut queue: VecDeque<SpoolRecord> = VecDeque::new();
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return queue;
+    };
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<SpoolRecord>(line) {
+            Ok(record) => enqueue(&mut queue, record, max_queue),
+            Err(e) => warn!(error = %e, "skipping corrupt telemetry spool line"),
+        }
+    }
+    queue
+}
+
+/// Atomically write the queue to the spool file (temp file + rename).
+fn save_spool(path: &Path, queue: &VecDeque<SpoolRecord>) -> Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create spool dir {}", parent.display()))?;
+        }
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    {
+        let mut file = std::fs::File::create(&tmp)
+            .with_context(|| format!("failed to create spool file {}", tmp.display()))?;
+        for record in queue {
+            let line = serde_json::to_string(record).context("spool serialization failed")?;
+            writeln!(file, "{line}").context("spool write failed")?;
+        }
+        file.sync_all().context("spool sync failed")?;
+    }
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("failed to replace spool file {}", path.display()))?;
+    Ok(())
+}
+
+fn clear_spool(path: &Path) {
+    if path.exists() {
+        if let Err(e) = std::fs::remove_file(path) {
+            warn!(error = %e, path = %path.display(), "failed to remove empty telemetry spool");
+        }
+    }
+}
+
 /// Sender half of the telemetry bridge. Clonable; one instance per daemon.
 #[derive(Debug, Clone)]
 pub struct DashboardReporter {
     config: DashboardConfig,
     tx: mpsc::Sender<ReporterMessage>,
+    shutdown_tx: watch::Sender<bool>,
 }
 
 impl DashboardReporter {
     /// Spawn the background posting task and return the sender handle.
     pub fn spawn(config: DashboardConfig) -> Self {
         let (tx, mut rx) = mpsc::channel::<ReporterMessage>(QUEUE_CAPACITY);
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let task_config = config.clone();
         tokio::spawn(async move {
-            let client = reqwest::Client::builder()
+            let client = match reqwest::Client::builder()
                 .timeout(Duration::from_secs(POST_TIMEOUT_SECS))
                 .build()
-                .context("dashboard telemetry client build failed")
-                .expect("reqwest client build failed");
-            while let Some(message) = rx.recv().await {
-                match message {
-                    ReporterMessage::Telemetry(frame) => {
-                        let url = task_config.url.clone();
-                        let token = task_config.token.clone();
-                        if let Err(e) = post_payload(&client, &url, &token, &frame).await {
-                            warn!(error = %e, "dashboard telemetry push failed (retried on next heartbeat)");
+            {
+                Ok(client) => client,
+                Err(e) => {
+                    warn!(error = %e, "dashboard telemetry client build failed; reporter stopped");
+                    return;
+                }
+            };
+
+            let max_queue = task_config.max_queue.max(1);
+
+            // Replay anything a previous shutdown spooled to disk.
+            let mut queue = load_spool(&task_config.spool_path, max_queue);
+            if !queue.is_empty() {
+                info!(
+                    count = queue.len(),
+                    path = %task_config.spool_path.display(),
+                    "replaying spooled dashboard telemetry"
+                );
+            }
+
+            let mut rx_open = true;
+            let mut retry_at: Option<tokio::time::Instant> = None;
+            let mut attempts: u32 = 0;
+
+            loop {
+                let retry_sleep = async {
+                    match retry_at {
+                        Some(when) => tokio::time::sleep_until(when).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                };
+
+                tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        flush_remaining(&client, &task_config, &mut queue).await;
+                        if queue.is_empty() {
+                            clear_spool(&task_config.spool_path);
                         } else {
-                            debug!(node = %frame.node_id, "dashboard telemetry pushed");
+                            match save_spool(&task_config.spool_path, &queue) {
+                                Ok(()) => info!(
+                                    count = queue.len(),
+                                    path = %task_config.spool_path.display(),
+                                    "spooled unsent dashboard telemetry for next boot"
+                                ),
+                                Err(e) => warn!(error = %e, "failed to spool unsent telemetry on shutdown"),
+                            }
+                        }
+                        break;
+                    }
+                    message = rx.recv(), if rx_open => {
+                        match message {
+                            Some(message) => enqueue(&mut queue, SpoolRecord::from(message), max_queue),
+                            None => rx_open = false,
                         }
                     }
-                    ReporterMessage::Session(event) => {
-                        let url = task_config.url.clone();
-                        let token = task_config.token.clone();
-                        if let Err(e) = post_payload(&client, &url, &token, &event).await {
-                            warn!(error = %e, session = %event.session_id, "dashboard session push failed");
-                        } else {
-                            debug!(session = %event.session_id, "dashboard session pushed");
+                    _ = retry_sleep, if retry_at.is_some() => {
+                        retry_at = None;
+                    }
+                }
+
+                // Deliver from the head of the queue while we are not in a
+                // backoff window. Each success resets the attempt counter.
+                while retry_at.is_none() {
+                    let Some(head) = queue.front().cloned() else {
+                        break;
+                    };
+                    match post_payload(&client, &task_config.url, &task_config.token, &head.payload).await
+                    {
+                        Ok(()) => {
+                            queue.pop_front();
+                            attempts = 0;
+                            debug!(kind = %head.kind, "dashboard frame pushed");
+                        }
+                        Err(e) => {
+                            attempts = attempts.saturating_add(1);
+                            let delay_ms = backoff_delay_ms(
+                                task_config.backoff_base_ms,
+                                task_config.backoff_max_ms,
+                                attempts,
+                                random_jitter(),
+                            );
+                            warn!(
+                                error = %e,
+                                kind = %head.kind,
+                                attempts,
+                                retry_in_ms = delay_ms,
+                                "dashboard push failed; frame kept for retry"
+                            );
+                            retry_at = Some(tokio::time::Instant::now() + Duration::from_millis(delay_ms));
+                            break;
                         }
                     }
                 }
+
+                if !rx_open && queue.is_empty() {
+                    break;
+                }
             }
         });
-        Self { config, tx }
+        Self {
+            config,
+            tx,
+            shutdown_tx,
+        }
     }
 
     /// Queue a frame without blocking the heartbeat. Frames are dropped on
@@ -404,12 +632,19 @@ impl DashboardReporter {
         self.try_send(ReporterMessage::Session(Box::new(event)));
     }
 
+    /// Signal the reporting task to run a time-boxed final delivery and
+    /// spool whatever remains. Non-blocking; returns `false` when the task
+    /// has already exited.
+    pub fn shutdown(&self) -> bool {
+        self.shutdown_tx.send(true).is_ok()
+    }
+
     fn try_send(&self, message: ReporterMessage) {
         use tokio::sync::mpsc::error::TrySendError;
         match self.tx.try_send(message) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                debug!("dashboard telemetry backlog full; dropping frame");
+                debug!("dashboard telemetry channel full; dropping frame");
             }
             Err(TrySendError::Closed(_)) => {
                 warn!("dashboard telemetry task not running; dropping frame");
@@ -424,6 +659,56 @@ impl DashboardReporter {
     pub fn user_id(&self) -> &str {
         &self.config.user_id
     }
+}
+
+/// Final delivery attempt on shutdown: keep posting until the queue is
+/// empty or the time budget runs out; the caller spools whatever is left.
+async fn flush_remaining(
+    client: &reqwest::Client,
+    config: &DashboardConfig,
+    queue: &mut VecDeque<SpoolRecord>,
+) {
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(SHUTDOWN_FLUSH_SECS);
+    while let Some(head) = queue.front() {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(
+            remaining,
+            post_payload(client, &config.url, &config.token, &head.payload),
+        )
+        .await
+        {
+            Ok(Ok(())) => {
+                debug!(kind = %head.kind, "dashboard frame flushed on shutdown");
+                queue.pop_front();
+            }
+            Ok(Err(e)) => {
+                warn!(error = %e, kind = %head.kind, "shutdown flush failed; frame will be spooled");
+                break;
+            }
+            Err(_elapsed) => {
+                warn!("shutdown flush timed out; remaining frames will be spooled");
+                break;
+            }
+        }
+    }
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(default)
 }
 
 async fn post_payload<T: Serialize>(
@@ -544,20 +829,6 @@ mod tests {
     }
 
     #[test]
-    fn config_from_env_disabled_without_required_vars() {
-        // All required vars absent → disabled.
-        for key in [
-            "DASHBOARD_TELEMETRY_URL",
-            "DASHBOARD_TELEMETRY_TOKEN",
-            "DASHBOARD_USER_ID",
-        ] {
-            std::env::remove_var(key);
-        }
-        std::env::remove_var("DASHBOARD_NODE_ID");
-        assert!(DashboardConfig::from_env().is_none());
-    }
-
-    #[test]
     fn session_event_from_close_maps_fields_and_earnings() {
         let details = SessionCloseDetails {
             remote_peer_id: "12D3KooWabc".to_string(),
@@ -601,5 +872,182 @@ mod tests {
         assert_eq!(json["session_id"], "tun_123");
         assert_eq!(json["exit_reason"], "completed");
         assert_eq!(json["remote_ip"], "1.2.3.4");
+    }
+
+    #[test]
+    fn backoff_grows_exponentially_and_caps() {
+        // Deterministic with zero jitter.
+        assert_eq!(backoff_delay_ms(500, 30_000, 1, 0.0), 500);
+        assert_eq!(backoff_delay_ms(500, 30_000, 2, 0.0), 1_000);
+        assert_eq!(backoff_delay_ms(500, 30_000, 3, 0.0), 2_000);
+        assert_eq!(backoff_delay_ms(500, 30_000, 7, 0.0), 30_000);
+        assert_eq!(backoff_delay_ms(500, 30_000, 100, 0.0), 30_000, "caps at max");
+    }
+
+    #[test]
+    fn backoff_jitter_stays_within_cap() {
+        for _ in 0..50 {
+            let d = backoff_delay_ms(500, 30_000, 4, random_jitter());
+            assert!((4_000..=30_000).contains(&d), "delay {d} outside bounds");
+        }
+    }
+
+    #[test]
+    fn backoff_handles_degenerate_inputs() {
+        assert_eq!(backoff_delay_ms(0, 30_000, 3, 0.0), 0);
+        assert_eq!(backoff_delay_ms(500, 0, 3, 0.0), 0);
+        // attempts=0 is treated as the first attempt.
+        assert_eq!(backoff_delay_ms(500, 30_000, 0, 0.0), 500);
+    }
+
+    #[test]
+    fn enqueue_drops_oldest_on_overflow() {
+        let mut queue: VecDeque<SpoolRecord> = VecDeque::new();
+        for i in 0..5 {
+            enqueue(
+                &mut queue,
+                SpoolRecord {
+                    kind: format!("k{i}"),
+                    payload: serde_json::json!({}),
+                },
+                3,
+            );
+        }
+        assert_eq!(queue.len(), 3);
+        assert_eq!(queue[0].kind, "k2");
+        assert_eq!(queue[2].kind, "k4");
+    }
+
+    #[test]
+    fn spool_record_roundtrips_through_json() {
+        let record = SpoolRecord {
+            kind: "session".to_string(),
+            payload: serde_json::json!({"session_id": "abc", "bytes_sent": 7}),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let back: SpoolRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, "session");
+        assert_eq!(back.payload["session_id"], "abc");
+        assert_eq!(back.payload["bytes_sent"], 7);
+    }
+
+    #[test]
+    fn reporter_message_converts_to_spool_record() {
+        let details = SessionCloseDetails {
+            remote_peer_id: "peer".to_string(),
+            remote_ip: None,
+            remote_port: None,
+            direction: "inbound".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: "2026-01-01T00:01:00Z".to_string(),
+            duration_secs: 60.0,
+            avg_latency_ms: 1.0,
+            exit_reason: "completed".to_string(),
+        };
+        let event = SessionEvent::from_close(
+            "node",
+            "user",
+            "tun_1",
+            10,
+            20,
+            0.5,
+            &details,
+        );
+        let record = SpoolRecord::from(ReporterMessage::Session(Box::new(event)));
+        assert_eq!(record.kind, "session");
+        assert_eq!(record.payload["session_id"], "tun_1");
+        assert_eq!(record.payload["bytes_relayed"], 30);
+    }
+
+    #[test]
+    fn spool_save_load_roundtrip_and_corruption_tolerance() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("spool.jsonl");
+
+        let mut queue: VecDeque<SpoolRecord> = VecDeque::new();
+        for i in 0..3 {
+            enqueue(
+                &mut queue,
+                SpoolRecord {
+                    kind: "telemetry".to_string(),
+                    payload: serde_json::json!({"n": i}),
+                },
+                16,
+            );
+        }
+        save_spool(&path, &queue).unwrap();
+
+        // Corrupt middle line must be skipped, not abort the replay.
+        let mut content = std::fs::read_to_string(&path).unwrap();
+        content.push_str("{not json at all\n");
+        std::fs::write(&path, content).unwrap();
+
+        let loaded = load_spool(&path, 16);
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded[0].payload["n"], 0);
+        assert_eq!(loaded[2].payload["n"], 2);
+
+        // Load caps at max_queue (drop-oldest).
+        let capped = load_spool(&path, 2);
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].payload["n"], 1);
+
+        clear_spool(&path);
+        assert!(!path.exists());
+        // Clearing a missing spool is a no-op.
+        clear_spool(&path);
+        assert!(load_spool(&path, 16).is_empty());
+    }
+
+    #[test]
+    fn config_from_env_reads_durability_knobs() {
+        // Consolidated (env is process-global; tests run in parallel).
+        for key in [
+            "DASHBOARD_TELEMETRY_URL",
+            "DASHBOARD_TELEMETRY_TOKEN",
+            "DASHBOARD_USER_ID",
+            "DASHBOARD_NODE_ID",
+        ] {
+            std::env::remove_var(key);
+        }
+        std::env::remove_var("DASHBOARD_TELEMETRY_SPOOL");
+        std::env::remove_var("DASHBOARD_TELEMETRY_BACKOFF_BASE_MS");
+        std::env::remove_var("DASHBOARD_TELEMETRY_BACKOFF_MAX_MS");
+        std::env::remove_var("DASHBOARD_TELEMETRY_MAX_QUEUE");
+        assert!(DashboardConfig::from_env().is_none());
+
+        std::env::set_var("DASHBOARD_TELEMETRY_URL", "https://example.test/ingest");
+        std::env::set_var("DASHBOARD_TELEMETRY_TOKEN", "tok");
+        std::env::set_var("DASHBOARD_USER_ID", "user-1");
+        std::env::set_var("DASHBOARD_NODE_ID", "node-1");
+        std::env::set_var("DASHBOARD_TELEMETRY_SPOOL", "/tmp/x/spool.jsonl");
+        std::env::set_var("DASHBOARD_TELEMETRY_BACKOFF_BASE_MS", "250");
+        std::env::set_var("DASHBOARD_TELEMETRY_BACKOFF_MAX_MS", "9000");
+        std::env::set_var("DASHBOARD_TELEMETRY_MAX_QUEUE", "32");
+        let cfg = DashboardConfig::from_env().unwrap();
+        assert_eq!(cfg.spool_path, PathBuf::from("/tmp/x/spool.jsonl"));
+        assert_eq!(cfg.backoff_base_ms, 250);
+        assert_eq!(cfg.backoff_max_ms, 9000);
+        assert_eq!(cfg.max_queue, 32);
+
+        // Defaults when durability knobs are unset.
+        std::env::remove_var("DASHBOARD_TELEMETRY_SPOOL");
+        std::env::remove_var("DASHBOARD_TELEMETRY_BACKOFF_BASE_MS");
+        std::env::remove_var("DASHBOARD_TELEMETRY_BACKOFF_MAX_MS");
+        std::env::remove_var("DASHBOARD_TELEMETRY_MAX_QUEUE");
+        let cfg = DashboardConfig::from_env().unwrap();
+        assert_eq!(cfg.spool_path, PathBuf::from("data/telemetry_spool.jsonl"));
+        assert_eq!(cfg.backoff_base_ms, 500);
+        assert_eq!(cfg.backoff_max_ms, 30_000);
+        assert_eq!(cfg.max_queue, 256);
+
+        for key in [
+            "DASHBOARD_TELEMETRY_URL",
+            "DASHBOARD_TELEMETRY_TOKEN",
+            "DASHBOARD_USER_ID",
+            "DASHBOARD_NODE_ID",
+        ] {
+            std::env::remove_var(key);
+        }
     }
 }

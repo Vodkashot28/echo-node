@@ -6,10 +6,12 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::availability::AvailabilityEngine;
 use crate::meter::{MeteringEngine, TokenBucket};
+use crate::policy::{PeerFacts, PolicyEngine, PolicyPermit};
+use crate::security::SecurityCounters;
 use crate::{ConnectionRecord, MetricsBackend, PeerReputation};
 
 use crate::NOISE_PARAMS;
@@ -20,6 +22,42 @@ pub const PROTOCOL_PROLOGUE_PREFIX: &[u8] = b"EchoMesh|v1|";
 
 /// Maximum Noise message size (snow default).
 const NOISE_MAX_MSG_LEN: usize = 65535;
+
+/// Lock-free latency accumulator for the relay hot path.
+///
+/// Both relay directions record per-chunk Noise encrypt/decrypt processing
+/// times. Plain atomics are used instead of a `Mutex<(f64, u64)>` so the
+/// hot path never takes a second async lock per chunk (the Noise transport
+/// mutex is already acquired around every message). Times are accumulated
+/// in nanoseconds as integers; `f64 as u64` casts saturate, so out-of-range
+/// or non-finite inputs degrade to `0` instead of panicking.
+#[derive(Default)]
+struct RelayLatency {
+    total_ns: std::sync::atomic::AtomicU64,
+    samples: std::sync::atomic::AtomicU64,
+}
+
+impl RelayLatency {
+    /// Record one encrypt/decrypt sample (milliseconds).
+    fn record(&self, ms: f64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.total_ns
+            .fetch_add((ms * 1_000_000.0) as u64, Relaxed);
+        self.samples.fetch_add(1, Relaxed);
+    }
+
+    /// Mean of all recorded samples in milliseconds, rounded to 0.01.
+    /// Returns `0.0` when no samples were recorded.
+    fn avg_ms(&self) -> f64 {
+        use std::sync::atomic::Ordering::Relaxed;
+        let samples = self.samples.load(Relaxed);
+        if samples == 0 {
+            return 0.0;
+        }
+        let avg_ns = self.total_ns.load(Relaxed) as f64 / samples as f64;
+        (avg_ns / 1_000_000.0 * 100.0).round() / 100.0
+    }
+}
 
 // ──────────────────────────────────────────────────────────────
 // Encrypted tunnel session — holds Noise transport + connection
@@ -69,6 +107,10 @@ pub struct RelayConfig {
     pub max_upload_mbps: f64,
     /// Maximum download bandwidth (Mbps) for token-bucket rate limiting.
     pub max_download_mbps: f64,
+    /// Provider admission policy (`None` = accept every handshake).
+    pub policy: Option<Arc<PolicyEngine>>,
+    /// Security/health counters (handshake failures, decrypt rejects, …).
+    pub security: Arc<SecurityCounters>,
 }
 
 /// Full accounting for a completed relay session, populated on the provider
@@ -238,6 +280,7 @@ impl TunnelService {
             .ok_or_else(|| anyhow!("responder failed to provide static public key"))?;
 
         if remote_static != expected_provider_noise_pubkey {
+            self.relay_config.security.inc_invalid_key_rejection();
             bail!(
                 "MITM detected: remote noise public key does not match discovery record \
                  (expected {} bytes, got {} bytes)",
@@ -317,6 +360,7 @@ impl TunnelService {
             &session.session_id,
             Some(&self.metering),
             &mut bucket,
+            &self.relay_config.security,
         )
         .await;
 
@@ -348,6 +392,7 @@ impl TunnelService {
             &session.session_id,
             None,
             &mut bucket,
+            &self.relay_config.security,
         )
         .await;
 
@@ -407,6 +452,8 @@ impl TunnelService {
                 local_peer_id: config.local_peer_id.clone(),
                 max_upload_mbps: config.max_upload_mbps,
                 max_download_mbps: config.max_download_mbps,
+                policy: config.policy.clone(),
+                security: config.security.clone(),
             };
             let sem = Arc::clone(&conn_semaphore);
             let sk = static_private_key.clone();
@@ -455,7 +502,13 @@ impl TunnelService {
         // and the session_id is not secret (it's just a binding value).
 
         // Read session_id and peer_id from consumer (plaintext, before Noise handshake)
-        let (session_id, remote_peer_id_str) = recv_session_and_peer_id(&mut stream).await?;
+        let (session_id, remote_peer_id_str) = match recv_session_and_peer_id(&mut stream).await {
+            Ok(v) => v,
+            Err(e) => {
+                config.security.inc_handshake_failure();
+                return Err(e);
+            }
+        };
         info!(
             session = session_id,
             remote_peer = %remote_peer_id_str,
@@ -478,29 +531,98 @@ impl TunnelService {
         let mut buf = [0u8; NOISE_MAX_MSG_LEN];
 
         // Msg 1 (Initiator → Responder): -> e
-        let len = recv_wire_msg(&mut stream, &mut buf).await?;
-        noise
-            .read_message(&buf[..len], &mut [])
-            .context("noise msg1 read failed")?;
+        let len = match recv_wire_msg(&mut stream, &mut buf).await {
+            Ok(len) => len,
+            Err(e) => {
+                config.security.inc_handshake_failure();
+                return Err(e);
+            }
+        };
+        if let Err(e) = noise.read_message(&buf[..len], &mut []) {
+            // Invalid/replayed handshake message (fails Noise authentication).
+            config.security.inc_replay_attempt();
+            return Err(e).context("noise msg1 read failed");
+        }
 
         // Msg 2 (Responder → Initiator): <- e, ee, s, es
-        let len = noise
-            .write_message(&[], &mut buf)
-            .context("noise msg2 write failed")?;
-        send_wire_msg(&mut stream, &buf[..len]).await?;
+        let len = match noise.write_message(&[], &mut buf) {
+            Ok(len) => len,
+            Err(e) => {
+                config.security.inc_handshake_failure();
+                return Err(e).context("noise msg2 write failed");
+            }
+        };
+        if let Err(e) = send_wire_msg(&mut stream, &buf[..len]).await {
+            config.security.inc_handshake_failure();
+            return Err(e);
+        }
 
         // Msg 3 (Initiator → Responder): -> s, se
-        let len = recv_wire_msg(&mut stream, &mut buf).await?;
-        noise
-            .read_message(&buf[..len], &mut [])
-            .context("noise msg3 read failed")?;
+        let len = match recv_wire_msg(&mut stream, &mut buf).await {
+            Ok(len) => len,
+            Err(e) => {
+                config.security.inc_handshake_failure();
+                return Err(e);
+            }
+        };
+        if let Err(e) = noise.read_message(&buf[..len], &mut []) {
+            // Invalid/replayed handshake message (fails Noise authentication).
+            config.security.inc_replay_attempt();
+            return Err(e).context("noise msg3 read failed");
+        }
 
         // Transition to symmetric transport mode
-        let transport = noise
-            .into_transport_mode()
-            .context("failed to transition to transport mode")?;
+        let transport = match noise.into_transport_mode() {
+            Ok(transport) => transport,
+            Err(e) => {
+                config.security.inc_handshake_failure();
+                return Err(e).context("failed to transition to transport mode");
+            }
+        };
 
         info!(session = session_id, "Noise_XX handshake completed");
+
+        // 2.5 Provider policy admission: blacklist / reputation / recorded
+        //     latency / per-peer + per-region quotas. Runs after the
+        //     handshake (the remote peer id is now authenticated) and before
+        //     any session slot is spent. The permit holds quota slots for the
+        //     whole session and releases them on drop.
+        let _policy_permit: Option<PolicyPermit> = match &config.policy {
+            None => None,
+            Some(policy) => {
+                let reputation = config
+                    .backend
+                    .get_peer_reputation(&remote_peer_id_str)
+                    .await
+                    .ok()
+                    .flatten();
+                let region = config
+                    .backend
+                    .get_capability_for_peer(&remote_peer_id_str)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|c| c.region)
+                    .unwrap_or_default();
+                let facts = PeerFacts {
+                    reputation_score: reputation.as_ref().map(|r| r.reputation_score),
+                    avg_latency_ms: reputation.as_ref().map(|r| r.avg_latency_ms),
+                };
+                match policy.admit(&remote_peer_id_str, &facts, &region) {
+                    Ok(permit) => Some(permit),
+                    Err(violation) => {
+                        config.security.inc_policy_rejection();
+                        warn!(
+                            session = %session_id,
+                            peer = %remote_peer_id_str,
+                            violation = %violation,
+                            "policy denied session"
+                        );
+                        return Err(anyhow!("policy denied session: {violation}"));
+                    }
+                }
+            }
+        };
 
         // 3. Acquire a session slot from the availability engine
         {
@@ -561,6 +683,7 @@ impl TunnelService {
             &session_id,
             Some(&config.metering),
             &mut TokenBucket::new(config.max_download_mbps, config.max_download_mbps),
+            &config.security,
         )
         .await;
 
@@ -633,7 +756,9 @@ impl TunnelService {
             total_bytes_relayed: bytes_sent + bytes_received,
             successful_sessions: 1,
             failed_sessions: 0,
-            avg_latency_ms: 0.0,
+            // Real measured session latency (the policy engine's latency gate
+            // reads this; the previous hardcoded 0.0 made it inert).
+            avg_latency_ms,
             last_active_at: Some(chrono::Utc::now().to_rfc3339()),
             recorded_at: Some(chrono::Utc::now().to_rfc3339()),
         };
@@ -689,6 +814,7 @@ impl TunnelService {
         session_id: &str,
         metering: Option<&MeteringEngine>,
         bucket: &mut TokenBucket,
+        security: &SecurityCounters,
     ) -> (u64, u64, f64) {
         use tokio::io::split;
 
@@ -698,18 +824,22 @@ impl TunnelService {
         let mut bytes_sent: u64 = 0;
         let mut bytes_received: u64 = 0;
 
-        // Shared latency tracking across both relay directions.
-        // Mutex is fine here since contention is minimal (one lock per chunk).
-        let latency_state = Arc::new(tokio::sync::Mutex::new((0.0f64, 0u64)));
+        // Shared latency tracking across both relay directions. Atomic
+        // counters (not a Mutex) — recording happens on every chunk inside
+        // the hot path, and the transport mutex is already contended.
+        let latency = Arc::new(RelayLatency::default());
 
         // Consumer → Target (egress): decrypt from tunnel, forward to target
         let transport_egress = transport.clone();
         let metering_egress = metering;
         let sid_e = session_id.to_string();
-        let latency_egress = latency_state.clone();
+        let latency_egress = latency.clone();
         let to_target = async {
             let mut raw_buf = [0u8; NOISE_MAX_MSG_LEN];
             let mut plain_buf = [0u8; NOISE_MAX_MSG_LEN];
+            // Throttle backpressure warnings: a slow client can trigger this
+            // on every chunk, and per-chunk warn! logging is expensive.
+            let mut last_bp_warn: Option<tokio::time::Instant> = None;
             loop {
                 // Read raw encrypted data from tunnel
                 let n = match tunnel_read.read(&mut raw_buf).await {
@@ -724,16 +854,35 @@ impl TunnelService {
                 if granted < mbps_requested {
                     let deficit = mbps_requested - granted;
                     // Sleep proportional to the deficit: how long until
-                    // enough tokens refill to cover the shortfall.
-                    let sleep_secs = deficit / bucket.refill_rate();
-                    warn!(
-                        session = %sid_e,
-                        requested_mbps = mbps_requested,
-                        granted_mbps = granted,
-                        backpressure_ms = (sleep_secs * 1000.0).round() as u64,
-                        "backpressure: rate limit exceeded, sleeping"
-                    );
-                    tokio::time::sleep(Duration::from_secs_f64(sleep_secs)).await;
+                    // enough tokens refill to cover the shortfall. The
+                    // helper clamps degenerate refill rates (no panic) and
+                    // caps individual sleeps.
+                    let sleep_secs = bucket.backpressure_sleep_secs(deficit);
+                    let now = tokio::time::Instant::now();
+                    let warn_due = last_bp_warn
+                        .map(|t| now.duration_since(t) >= Duration::from_secs(5))
+                        .unwrap_or(true);
+                    if warn_due {
+                        last_bp_warn = Some(now);
+                        warn!(
+                            session = %sid_e,
+                            requested_mbps = mbps_requested,
+                            granted_mbps = granted,
+                            backpressure_ms = (sleep_secs * 1000.0).round() as u64,
+                            "backpressure: rate limit exceeded, sleeping"
+                        );
+                    } else {
+                        debug!(
+                            session = %sid_e,
+                            requested_mbps = mbps_requested,
+                            granted_mbps = granted,
+                            backpressure_ms = (sleep_secs * 1000.0).round() as u64,
+                            "backpressure: rate limit exceeded, sleeping"
+                        );
+                    }
+                    if sleep_secs > 0.0 {
+                        tokio::time::sleep(Duration::from_secs_f64(sleep_secs)).await;
+                    }
                 }
 
                 // Decrypt
@@ -742,14 +891,14 @@ impl TunnelService {
                     let mut transport = transport_egress.lock().await;
                     let result = transport.read_message(&raw_buf[..n], &mut plain_buf);
                     let decrypt_ms = t_before.elapsed().as_secs_f64() * 1000.0;
-                    {
-                        let mut ls = latency_egress.lock().await;
-                        ls.0 += decrypt_ms;
-                        ls.1 += 1;
-                    }
+                    latency_egress.record(decrypt_ms);
                     match result {
                         Ok(len) => len,
                         Err(e) => {
+                            // AEAD reject: the frame failed authentication —
+                            // corruption, tampering, or replay (snow collapses
+                            // all three into Error::Decrypt).
+                            security.inc_frame_decrypt_failure();
                             warn!(session = %sid_e, error = %e, "noise decrypt failed");
                             break;
                         }
@@ -773,7 +922,7 @@ impl TunnelService {
         let transport_ingress = transport.clone();
         let metering_ingress = metering;
         let sid_i = session_id.to_string();
-        let latency_ingress = latency_state.clone();
+        let latency_ingress = latency.clone();
         let to_tunnel = async {
             let mut plain_buf = [0u8; NOISE_MAX_MSG_LEN];
             let mut enc_buf = [0u8; NOISE_MAX_MSG_LEN];
@@ -791,11 +940,7 @@ impl TunnelService {
                     let mut transport = transport_ingress.lock().await;
                     let result = transport.write_message(&plain_buf[..n], &mut enc_buf);
                     let encrypt_ms = t_before.elapsed().as_secs_f64() * 1000.0;
-                    {
-                        let mut ls = latency_ingress.lock().await;
-                        ls.0 += encrypt_ms;
-                        ls.1 += 1;
-                    }
+                    latency_ingress.record(encrypt_ms);
                     match result {
                         Ok(len) => len,
                         Err(e) => {
@@ -823,17 +968,7 @@ impl TunnelService {
             _ = to_tunnel => {}
         }
 
-        let (lat_sum, lat_count) = {
-            let ls = latency_state.lock().await;
-            *ls
-        };
-        let avg_latency_ms = if lat_count > 0 {
-            (lat_sum / lat_count as f64 * 100.0).round() / 100.0
-        } else {
-            0.0
-        };
-
-        (bytes_sent, bytes_received, avg_latency_ms)
+        (bytes_sent, bytes_received, latency.avg_ms())
     }
 }
 
@@ -938,4 +1073,44 @@ async fn recv_session_and_peer_id(stream: &mut TcpStream) -> Result<(String, Str
         String::from_utf8(peer_buf).context("invalid peer ID encoding")?;
 
     Ok((session_id, peer_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relay_latency_empty_is_zero() {
+        assert_eq!(RelayLatency::default().avg_ms(), 0.0);
+    }
+
+    #[test]
+    fn relay_latency_averages_samples_and_rounds_to_001() {
+        let latency = RelayLatency::default();
+        latency.record(1.0);
+        latency.record(2.0);
+        latency.record(4.0); // mean = 2.3333... → 2.33
+        assert_eq!(latency.avg_ms(), 2.33);
+    }
+
+    #[test]
+    fn relay_latency_single_sample() {
+        let latency = RelayLatency::default();
+        latency.record(0.1234);
+        assert_eq!(latency.avg_ms(), 0.12);
+    }
+
+    #[test]
+    fn relay_latency_tolerates_degenerate_inputs() {
+        // `f64 as u64` saturates (NaN/negative → 0), so recording garbage
+        // must not panic or produce NaN averages.
+        let latency = RelayLatency::default();
+        latency.record(f64::NAN);
+        latency.record(-5.0);
+        latency.record(1.0);
+        let avg = latency.avg_ms();
+        assert!(avg.is_finite(), "average must stay finite, got {avg}");
+        // samples = 3, total = 1ms → 0.33
+        assert_eq!(avg, 0.33);
+    }
 }

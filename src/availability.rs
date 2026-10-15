@@ -269,3 +269,124 @@ impl AvailabilityEngine {
         (stats, avail_up, avail_down)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Enormous physical capacity so machine-local usage can never zero it
+    /// out — lets tests assert capacity sign/magnitude deterministically.
+    const HUGE_MBPS: f64 = 1.0e9;
+
+    #[test]
+    fn session_slot_acquire_up_to_max_then_reject() {
+        let mut engine = AvailabilityEngine::new(100.0, 100.0, 3);
+        assert_eq!(engine.active_sessions(), 0);
+
+        engine.try_acquire_session().unwrap();
+        engine.try_acquire_session().unwrap();
+        engine.try_acquire_session().unwrap();
+        assert_eq!(engine.active_sessions(), 3);
+
+        let err = engine
+            .try_acquire_session()
+            .expect_err("4th session must be rejected at max_sessions=3");
+        assert!(err.contains("max session limit"));
+        assert_eq!(engine.active_sessions(), 3, "failed acquire must not leak a slot");
+    }
+
+    #[test]
+    fn session_slot_release_is_idempotent_and_never_underflows() {
+        let mut engine = AvailabilityEngine::new(100.0, 100.0, 2);
+        // Releasing with zero active sessions must not wrap around.
+        engine.release_session();
+        assert_eq!(engine.active_sessions(), 0);
+
+        engine.try_acquire_session().unwrap();
+        engine.release_session();
+        engine.release_session(); // double-release (bug guard)
+        assert_eq!(engine.active_sessions(), 0);
+    }
+
+    #[test]
+    fn avg_latency_uses_empty_until_samples_arrive() {
+        let engine = AvailabilityEngine::new(100.0, 100.0, 1);
+        assert_eq!(engine.compute_avg_latency(), 0.0);
+    }
+
+    #[test]
+    fn avg_latency_averages_and_rounds_samples() {
+        let mut engine = AvailabilityEngine::new(100.0, 100.0, 1);
+        engine.record_latency(10.0);
+        engine.record_latency(20.5);
+        engine.record_latency(30.0);
+        // (10 + 20.5 + 30) / 3 = 20.1666... → 20.17
+        assert_eq!(engine.compute_avg_latency(), 20.17);
+    }
+
+    #[test]
+    fn avg_latency_window_keeps_only_last_60_samples() {
+        let mut engine = AvailabilityEngine::new(100.0, 100.0, 1);
+        for _ in 0..LATENCY_WINDOW {
+            engine.record_latency(10.0);
+        }
+        // Window is now full of 10.0 samples; 100 more of 30.0 push them out.
+        for _ in 0..100 {
+            engine.record_latency(30.0);
+        }
+        assert_eq!(engine.compute_avg_latency(), 30.0);
+    }
+
+    #[test]
+    fn capacity_positive_when_sessions_available() {
+        let mut engine = AvailabilityEngine::new(HUGE_MBPS, HUGE_MBPS, 10);
+        let (_, up, down) = engine.refresh_and_compute();
+        assert!(up > 0.0, "expected positive upload capacity, got {up}");
+        assert!(down > 0.0, "expected positive download capacity, got {down}");
+    }
+
+    #[test]
+    fn capacity_zero_when_session_slots_saturated() {
+        let mut engine = AvailabilityEngine::new(HUGE_MBPS, HUGE_MBPS, 2);
+        engine.try_acquire_session().unwrap();
+        engine.try_acquire_session().unwrap();
+
+        let (stats, up, down) = engine.refresh_and_compute();
+        assert_eq!(up, 0.0, "saturated sessions must advertise zero upload");
+        assert_eq!(down, 0.0, "saturated sessions must advertise zero download");
+        assert_eq!(stats.active_sessions, 2);
+    }
+
+    #[test]
+    fn capability_descriptor_reports_session_state() {
+        let mut engine = AvailabilityEngine::new(HUGE_MBPS, HUGE_MBPS, 2);
+        engine.record_latency(42.0);
+        engine.try_acquire_session().unwrap();
+
+        let descriptor = engine.build_capability_descriptor(
+            "peer_test",
+            vec![1, 2, 3],
+            "us-west",
+            0.9,
+            vec![4, 5, 6],
+        );
+        assert_eq!(descriptor.peer_id, "peer_test");
+        assert_eq!(descriptor.region, "us-west");
+        assert_eq!(descriptor.max_sessions, 2);
+        assert_eq!(descriptor.active_sessions, 1);
+        assert_eq!(descriptor.avg_latency_ms, 42.0);
+        assert!(descriptor.upload_cap_mbps > 0.0);
+        assert_eq!(descriptor.supported_encryption, vec!["noise-xx"]);
+    }
+
+    #[test]
+    fn zero_max_sessions_advertises_zero_without_dividing_by_zero() {
+        // max_sessions = 0 → session_factor guard must short-circuit to 0.0
+        // instead of dividing by zero.
+        let mut engine = AvailabilityEngine::new(HUGE_MBPS, HUGE_MBPS, 0);
+        let (_, up, down) = engine.refresh_and_compute();
+        assert_eq!(up, 0.0);
+        assert_eq!(down, 0.0);
+        assert!(engine.try_acquire_session().is_err());
+    }
+}

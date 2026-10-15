@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod availability;
 pub mod consumer;
 pub mod discovery;
@@ -6,6 +7,8 @@ pub mod meter;
 pub mod migrator;
 pub mod models;
 pub mod neon;
+pub mod policy;
+pub mod security;
 pub mod settlement;
 pub mod sqlite_store;
 pub mod telemetry;
@@ -85,6 +88,20 @@ pub fn base64_decode(input: &str) -> Vec<u8> {
     output
 }
 
+/// Constant-time byte-string comparison to prevent timing side-channel attacks.
+/// Returns `true` if `a` and `b` have the same length and every byte is equal,
+/// without early-exiting on the first mismatch.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 #[async_trait]
 pub trait MetricsBackend: Send + Sync {
     async fn upsert_node(&self, row: &NodeRow) -> Result<()>;
@@ -120,4 +137,5 @@ pub trait MetricsBackend: Send + Sync {
         min_download_mbps: f64,
         limit: i64,
     ) -> Result<Vec<CapabilityDescriptor>>;
+    async fn get_capability_for_peer(&self, peer_id: &str) -> Result<Option<CapabilityDescriptor>>;
 }

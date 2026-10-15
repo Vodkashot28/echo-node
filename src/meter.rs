@@ -12,6 +12,12 @@ use crate::base64_encode;
 // Token Bucket Rate Limiter
 // ──────────────────────────────────────────────────────────────
 
+/// Upper bound on a single backpressure sleep (seconds). A large deficit
+/// paired with a tiny refill rate could otherwise stall one relay chunk for
+/// minutes; capping keeps the long-run rate intact (subsequent chunks still
+/// drain the bucket) while the loop stays responsive.
+const MAX_BACKPRESSURE_SLEEP_SECS: f64 = 60.0;
+
 #[derive(Debug, Clone)]
 pub struct TokenBucket {
     capacity: f64,
@@ -47,6 +53,23 @@ impl TokenBucket {
     /// Get the refill rate (tokens/seconds) for computing sleep durations.
     pub fn refill_rate(&self) -> f64 {
         self.refill_rate
+    }
+
+    /// Seconds the relay should sleep so the bucket refills enough to cover
+    /// `deficit_mbps` of traffic that was granted less than requested.
+    ///
+    /// Safe against degenerate configurations: a non-positive or non-finite
+    /// refill rate would yield `inf`/`NaN` and panic
+    /// `Duration::from_secs_f64`, so those return `0.0` (no sleep).
+    /// Individual sleeps are capped at [`MAX_BACKPRESSURE_SLEEP_SECS`].
+    pub fn backpressure_sleep_secs(&self, deficit_mbps: f64) -> f64 {
+        if !deficit_mbps.is_finite() || deficit_mbps <= 0.0 {
+            return 0.0;
+        }
+        if !self.refill_rate.is_finite() || self.refill_rate <= 0.0 {
+            return 0.0;
+        }
+        (deficit_mbps / self.refill_rate).clamp(0.0, MAX_BACKPRESSURE_SLEEP_SECS)
     }
 
     fn refill(&mut self) {
@@ -351,5 +374,151 @@ mod tests {
         let result = receipt.verify_signature(&other_key.to_bytes());
         assert!(result.is_ok());
         assert!(!result.unwrap(), "verification should have failed with wrong key");
+    }
+
+    // ── Backpressure sleep math (relay hot path) ──────────────
+
+    #[test]
+    fn backpressure_sleep_is_proportional_to_deficit() {
+        let bucket = TokenBucket::new(10.0, 10.0);
+        // 5 Mbps deficit at 10 tokens/sec → 0.5s
+        assert_eq!(bucket.backpressure_sleep_secs(5.0), 0.5);
+    }
+
+    #[test]
+    fn backpressure_sleep_zero_refill_rate_is_zero_not_infinite() {
+        // A zero refill rate used to produce `deficit / 0.0 = inf`, which
+        // panics `Duration::from_secs_f64`. Must return 0.0 instead.
+        let bucket = TokenBucket::new(10.0, 0.0);
+        assert_eq!(bucket.backpressure_sleep_secs(5.0), 0.0);
+    }
+
+    #[test]
+    fn backpressure_sleep_rejects_non_positive_or_non_finite_deficit() {
+        let bucket = TokenBucket::new(10.0, 10.0);
+        assert_eq!(bucket.backpressure_sleep_secs(0.0), 0.0);
+        assert_eq!(bucket.backpressure_sleep_secs(-1.0), 0.0);
+        assert_eq!(bucket.backpressure_sleep_secs(f64::NAN), 0.0);
+        assert_eq!(bucket.backpressure_sleep_secs(f64::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn backpressure_sleep_is_capped() {
+        // Huge deficit / tiny refill rate would sleep for years unclamped.
+        let bucket = TokenBucket::new(1.0, 0.001);
+        assert_eq!(bucket.backpressure_sleep_secs(1_000_000.0), 60.0);
+    }
+
+    #[test]
+    fn token_bucket_refills_after_drain() {
+        let mut bucket = TokenBucket::new(10.0, 1_000.0);
+        assert_eq!(bucket.consume(10.0), 10.0);
+        assert!(bucket.available() < 1.0, "bucket should be drained");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // 1000 tokens/sec * 0.05s = 50 tokens, capped at capacity 10.
+        assert!(
+            bucket.available() > 9.0,
+            "bucket should refill to capacity, got {}",
+            bucket.available()
+        );
+    }
+
+    // ── MeteringEngine receipt issuance ───────────────────────
+
+    /// Build an in-memory identity with a real ed25519 keypair (no file IO).
+    fn test_identity() -> crate::identity::NodeIdentity {
+        use crate::identity::NodeIdentity;
+        use ed25519_dalek::SigningKey;
+        use rand::rngs::OsRng;
+
+        let sk = SigningKey::generate(&mut OsRng);
+        let vk = sk.verifying_key();
+        NodeIdentity {
+            peer_id: "peer_test_local".to_string(),
+            keypair_bytes: sk.to_bytes().to_vec(),
+            public_key_bytes: vk.to_bytes().to_vec(),
+            region: "test".to_string(),
+            noise_secret_key: vec![7u8; 32],
+            noise_public_key: vec![9u8; 32],
+        }
+    }
+
+    #[tokio::test]
+    async fn metering_issues_receipt_at_packet_interval() {
+        let (engine, mut rx) = MeteringEngine::with_config(test_identity(), 3, u64::MAX);
+        engine.start_session("s1", "peer_remote").await;
+
+        engine.record_transfer("s1", "egress", 10).await.unwrap();
+        engine.record_transfer("s1", "egress", 10).await.unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "no receipt before the interval threshold"
+        );
+
+        engine.record_transfer("s1", "egress", 10).await.unwrap();
+        let receipt = rx.try_recv().expect("3rd packet must issue a receipt");
+        assert_eq!(receipt.session_id, "s1");
+        assert_eq!(receipt.sequence_number, 3);
+        assert_eq!(receipt.bytes_transferred, 30);
+        assert_eq!(receipt.direction, "bidirectional");
+    }
+
+    #[tokio::test]
+    async fn metering_issues_receipt_for_large_chunk() {
+        let (engine, mut rx) = MeteringEngine::with_config(test_identity(), 100, 1_000);
+        engine.start_session("s1", "peer_remote").await;
+
+        // Small transfer: under both thresholds.
+        engine.record_transfer("s1", "ingress", 500).await.unwrap();
+        assert!(rx.try_recv().is_err());
+
+        // Single chunk over the byte threshold triggers immediately.
+        engine.record_transfer("s1", "ingress", 1_001).await.unwrap();
+        let receipt = rx.try_recv().expect("large chunk must issue a receipt");
+        assert_eq!(receipt.bytes_transferred, 1_501);
+        assert_eq!(receipt.sequence_number, 2);
+    }
+
+    #[tokio::test]
+    async fn metering_receipts_are_signed_with_node_key() {
+        let identity = test_identity();
+        let pubkey = identity.public_key_bytes.clone();
+        let (engine, mut rx) = MeteringEngine::with_config(identity, 1, u64::MAX);
+        engine.start_session("s1", "peer_remote").await;
+
+        engine.record_transfer("s1", "egress", 42).await.unwrap();
+        let receipt = rx.try_recv().unwrap();
+        let valid = receipt
+            .verify_signature(&pubkey)
+            .expect("pubkey is 32 bytes");
+        assert!(valid, "receipt must verify against the node's public key");
+    }
+
+    #[tokio::test]
+    async fn metering_end_session_returns_final_receipt_and_removes_session() {
+        let (engine, mut rx) = MeteringEngine::with_config(test_identity(), 100, u64::MAX);
+        engine.start_session("s1", "peer_remote").await;
+        engine.record_transfer("s1", "egress", 100).await.unwrap();
+
+        let final_receipt = engine.end_session("s1").await.unwrap();
+        assert_eq!(final_receipt.bytes_transferred, 100);
+        // The final receipt is also forwarded on the channel for persistence.
+        let forwarded = rx.try_recv().expect("final receipt forwarded");
+        assert_eq!(forwarded.receipt_id, final_receipt.receipt_id);
+
+        // Session is gone: a second end fails and transfers are rejected.
+        assert!(engine.end_session("s1").await.is_err());
+        assert!(engine.record_transfer("s1", "egress", 1).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn metering_rejects_invalid_direction() {
+        let (engine, _rx) = MeteringEngine::with_config(test_identity(), 100, u64::MAX);
+        engine.start_session("s1", "peer_remote").await;
+        let err = engine
+            .record_transfer("s1", "sideways", 10)
+            .await
+            .expect_err("invalid direction must error");
+        assert!(err.to_string().contains("invalid direction"));
     }
 }

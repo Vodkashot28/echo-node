@@ -11,6 +11,7 @@ use echo_daemon::availability::AvailabilityEngine;
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
 use echo_daemon::sqlite_store::SqliteStore;
+use echo_daemon::security::SecurityCounters;
 use echo_daemon::tunnel::{RelayConfig, TunnelEvent, TunnelService};
 use echo_daemon::MetricsBackend;
 use std::sync::Arc;
@@ -86,6 +87,8 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         local_peer_id: provider.peer_id_str().to_string(),
         max_upload_mbps: 10.0,
         max_download_mbps: 10.0,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
     };
     let (provider_svc, mut provider_events) = TunnelService::new(
         provider_peer_id,
@@ -107,6 +110,8 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         local_peer_id: provider_svc.relay_config().local_peer_id.clone(),
         max_upload_mbps: provider_svc.relay_config().max_upload_mbps,
         max_download_mbps: provider_svc.relay_config().max_download_mbps,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
     };
     let listener_addr = tunnel_addr.clone();
     let listener_task = tokio::spawn(async move {
@@ -132,6 +137,8 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         local_peer_id: consumer.peer_id_str().to_string(),
         max_upload_mbps: 0.0,
         max_download_mbps: 0.0,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
     };
     let (consumer_svc, _consumer_events) = TunnelService::new(
         consumer_peer_id,

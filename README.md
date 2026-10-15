@@ -148,7 +148,9 @@ sequenceDiagram
 | **MITM prevention** | Static key pinning | Provider's Noise public key verified against DB capability record |
 | **Connection limiting** | Semaphore with RAII permits | `OwnedSemaphorePermit` in `EncryptedTunnelSession` |
 | **Identity protection** | File permissions 0600 | Unix `set_permissions` on identity file after every write |
-| **API authentication** | Constant-time Bearer token | XOR-based comparison prevents timing side-channels |
+| **API authentication** | Scoped constant-time Bearer tokens | `API_KEYS` (per-key `control`/`settlements` scopes) or legacy `API_KEY` (admin); XOR-based comparison prevents timing side-channels; 401/403 |
+| **Admission policy** | Optional reputation/latency gates + quotas | `POLICY_*` env; RAII permits release slots on drop; all-open by default (engine off hot path) |
+| **DHT namespacing** | Network-id prefixed Kademlia protocol | `DHT_NETWORK_ID` isolates swarms (`/<id>/kad/1.0.0`); bootstrap + local-only via `DHT_*` |
 | **Input validation** | Length caps on pre-handshake messages | session_id <= 256 bytes, peer_id <= 512 bytes |
 | **Receipt integrity** | Ed25519 signatures | Provider signs receipts; consumers verify |
 
@@ -309,19 +311,22 @@ Schema is created and upgraded by versioned SQL migrations (`migrations/{postgre
 
 ```
 src/
-├── lib.rs              # MetricsBackend trait (16 methods) + shared base64 utils
-├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (1737 lines)
+├── lib.rs              # MetricsBackend trait (17 methods) + shared base64 utils + constant_time_eq
+├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (1865 lines)
 ├── models.rs           # 10 data models (NodeRow, PeerReputation, SettlementRecord, etc.)
 ├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, file permissions
-├── discovery.rs        # libp2p Kademlia DHT swarm, provider discovery
-├── tunnel.rs           # Noise_XX handshake, bidirectional relay, backpressure (941 lines)
+├── discovery.rs        # libp2p Kademlia DHT swarm, provider discovery (DHT_* env config)
+├── tunnel.rs           # Noise_XX handshake, bidirectional relay, policy admission (1116 lines)
 ├── consumer.rs         # Consumer forward listener: local apps → provider tunnel
 ├── meter.rs            # Token bucket, signed receipts, session metering
 ├── availability.rs     # Capacity engine, session management
+├── auth.rs             # Scoped API keys (API_KEYS), require_scope middleware
+├── policy.rs           # Provider admission policy (POLICY_* env): gates, quotas, RAII permits
+├── security.rs         # SecurityCounters — handshake/replay/decrypt/policy/auth/receipt telemetry
 ├── migrator.rs         # Versioned SQL migrations: splitter, apply, schema_migrations
 ├── neon.rs             # PostgreSQL backend (runs migrations/postgres/*.sql)
 ├── settlement.rs       # Payout engine: receipts → idempotent settlement rows (bytes + USD)
-├── telemetry.rs        # Optional dashboard bridge (DASHBOARD_* env): heartbeat + session-close frames → Supabase (604 lines)
+├── telemetry.rs        # Optional dashboard bridge (DASHBOARD_* env): durable spool + backoff (1052 lines)
 └── sqlite_store.rs     # SQLite backend (runs migrations/sqlite/*.sql)
 ```
 
@@ -352,8 +357,13 @@ cargo run --release
 | GET | `/status` | None | Daemon status + active sessions |
 | GET | `/health` | None | Health check (healthy/degraded/unhealthy) |
 | POST | `/match` | None | Query providers by region + min bandwidth |
-| POST | `/control` | Bearer | Start/stop/restart daemon |
-| GET | `/settlements` | Bearer | Payout totals + settled receipts |
+| POST | `/control` | Bearer (scope `control`) | Start/stop/restart daemon |
+| GET | `/settlements` | Bearer (scope `settlements`) | Payout totals + settled receipts |
+
+Bearer tokens come from `API_KEYS` (scoped) or the legacy `API_KEY`
+(admin = all scopes). With neither set the control plane is open — token
+comparison is always constant-time. Unknown/invalid tokens get `401` with
+`WWW-Authenticate: Bearer`; a valid token missing the required scope gets `403`.
 
 ### Response Examples
 
@@ -385,9 +395,22 @@ startup and is omitted from the JSON until detection lands (never `null`).
   "heartbeat_count": 360,
   "last_heartbeat": 1694003600,
   "db_connected": true,
-  "active_sessions": 3
+  "active_sessions": 3,
+  "security": {
+    "handshake_failures": 0,
+    "invalid_key_rejections": 0,
+    "replay_attempts": 0,
+    "frame_decrypt_failures": 0,
+    "api_auth_failures": 0,
+    "policy_rejections": 0,
+    "settlement_anomalies": 0
+  }
 }
 ```
+The `security` block is the same snapshot embedded in `GET /health`
+(process-lifetime counters: Noise handshake failures, pinned-key mismatches,
+replayed/handshake-msg rejects, transport decrypt failures, API 401/403s,
+policy denials, and unverifiable receipts).
 
 **POST /match**
 ```json
@@ -437,7 +460,17 @@ See `GAPS.md` for the full integration status.
 | `MAX_DOWNLOAD_MBPS` | `100.0` | Physical downlink capacity (Mbps) |
 | `MAX_SESSIONS` | `10` | Max concurrent tunnel sessions |
 | `IDENTITY_PATH` | `data/identity.json` | Persistent node identity file |
-| `API_KEY` | (unset) | API key for `/control` + `/settlements` endpoints (Bearer auth) |
+| `API_KEY` | (unset) | Legacy admin API key for `/control` + `/settlements` (all scopes) |
+| `API_KEYS` | (unset) | JSON array of scoped keys: `[{"token":"…","name":"ops","scopes":["control"]}]` — scopes are `control` / `settlements`; both `API_KEY` + `API_KEYS` unset → auth disabled |
+| `POLICY_MIN_REPUTATION` | `0.0` | Admission gate: reject peers below this reputation score (0 = off) |
+| `POLICY_MAX_LATENCY_MS` | `0` | Admission gate: reject peers with higher recorded RTT (0 = off) |
+| `POLICY_MAX_SESSIONS_PER_PEER` | `0` | Quota: concurrent sessions per peer id (0 = off) |
+| `POLICY_MAX_SESSIONS_PER_REGION` | `0` | Quota: concurrent sessions per region (0 = off) |
+| `POLICY_BLOCKED_PEERS` | (unset) | Comma-separated peer ids always rejected |
+| `DHT_LISTEN_ADDR` | `/ip4/0.0.0.0/tcp/0` | libp2p swarm listen multiaddr |
+| `DHT_BOOTSTRAP_PEERS` | (unset) | Comma-separated multiaddrs, each ending `/p2p/<peer-id>` |
+| `DHT_NETWORK_ID` | `echo` | Namespaces the Kademlia protocol to `/<id>/kad/1.0.0` |
+| `DHT_LOCAL_ONLY` | `false` | `true` = no bootstrap (dev mode) |
 | `RELAY_TARGET` | `127.0.0.1:80` | Target address for incoming tunnel relay |
 | `TUNNEL_ADDR` | `0.0.0.0:3002` | Tunnel listener bind address |
 | `SETTLEMENT_RATE_USD_PER_GB` | `0.50` | USD payout per GB relayed (accumulated on verified receipts) |
@@ -450,6 +483,10 @@ See `GAPS.md` for the full integration status.
 | `DASHBOARD_TELEMETRY_TOKEN` | (unset) | Shared secret, sent as `Authorization: Bearer` — must equal the `DASHBOARD_TELEMETRY_TOKEN` function secret |
 | `DASHBOARD_USER_ID` | (unset) | Supabase auth user UUID that owns this node (binds rows for RLS) |
 | `DASHBOARD_NODE_ID` | (auto UUID) | Stable UUID for this node's dashboard `nodes` row; generated v4 at startup if unset (changes across restarts) |
+| `DASHBOARD_TELEMETRY_SPOOL` | `data/telemetry_spool.jsonl` | Durable spool for frames that outlive a failed run; replayed on next boot |
+| `DASHBOARD_TELEMETRY_MAX_QUEUE` | `256` | In-memory frame queue cap (overflow drops oldest) |
+| `DASHBOARD_TELEMETRY_BACKOFF_BASE_MS` | `500` | First retry delay after a failed dashboard push |
+| `DASHBOARD_TELEMETRY_BACKOFF_MAX_MS` | `30000` | Ceiling for the exponential retry delay (±20% jitter) |
 | `RUST_LOG` | `echo_daemon=info` | Log level filter |
 
 ## Dependencies
@@ -482,19 +519,19 @@ instead (task 9).
 
 | # | Task | Line | Description |
 |---|------|------|-------------|
-| — | **Dashboard Reporter** | 1196 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
-| — | **Public IP detection** | 1384 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
-| 1 | **Tunnel Event Handler** | 1209 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
-| 2 | **Tunnel Listener** | 1273 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
-| 3 | **Discovery Event Loop** | 1340 | Runs libp2p swarm event loop, handles DHT GetProviders/PutRecord results |
-| 4 | **Discovery Event Handler** | 1345 | Processes `DiscoveryEvent::PeerFound/Disconnected/CapabilityPublished` |
-| 5 | **Heartbeat** | 1401 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
-| 6 | **Metric Cleanup** | 1408 | Removes metrics older than 30 days (daily) |
-| 7 | **Capability Publisher** | 1432 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
-| 8 | **Receipt Settlement** | 1484 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
+| — | **Dashboard Reporter** | 1234 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
+| — | **Public IP detection** | 1430 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
+| 1 | **Tunnel Event Handler** | 1247 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
+| 2 | **Tunnel Listener** | 1313 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
+| 3 | **Discovery Event Loop** | 1386 | Runs libp2p swarm event loop, handles DHT GetProviders/PutRecord results |
+| 4 | **Discovery Event Handler** | 1391 | Processes `DiscoveryEvent::PeerFound/Disconnected/CapabilityPublished` |
+| 5 | **Heartbeat** | 1447 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
+| 6 | **Metric Cleanup** | 1454 | Removes metrics older than 30 days (daily) |
+| 7 | **Capability Publisher** | 1478 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
+| 8 | **Receipt Settlement** | 1531 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
 | 9 | **Consumer Listener** | `consumer.rs` (consumer only) | Accepts local app connections on `CONSUMER_LISTEN_ADDR`, dials the provider (`connect_to_provider`), relays app traffic through the Noise tunnel without issuing consumer receipts |
 
-Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1634).
+Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1700).
 
 ## Consumer Mode Quick Start
 
@@ -525,6 +562,9 @@ value must decode to exactly 32 bytes.
 | **Dual DB backends** | SQLite for local dev, PostgreSQL for production |
 | **Versioned SQL migrations** | `migrator.rs` applies embedded `migrations/{postgres,sqlite}/*.sql` in order, tracked in `schema_migrations`; per-file transactions with retry-on-failure |
 | **Constant-time API key** | Prevents timing attacks on the Bearer token |
+| **Scoped API keys** | `API_KEYS` splits the control plane (`control` vs `settlements`); legacy `API_KEY` stays admin for compatibility |
+| **Opt-in admission policy** | An all-open config keeps `policy` off the relay hot path entirely; enabling any gate activates DB-backed checks |
+| **Durable telemetry queue** | Frames drop-oldest in memory, back off exponentially on failure, and spill to a disk spool so no heartbeat data is lost across restarts |
 | **Token bucket backpressure** | Sleep-based backpressure is simpler than channel-based flow control |
 | **PeerId-based reputation** | Stable identity across sessions (vs. SocketAddr which changes) |
 | **Accumulative reputation** | `total_bytes += delta` preserves historical contribution |
