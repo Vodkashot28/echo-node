@@ -156,6 +156,7 @@ sequenceDiagram
 | **Match filtering** | `/match` hygiene | rejects malformed requests (region caps, sane bandwidth floors), drops self/blocked/full/stale/keyless providers (`MATCH_MAX_STALE_SECS`) |
 | **Body limits** | 16 KiB request cap | all HTTP request bodies capped (control-plane JSON is tiny) |
 | **Security alerts** | Sliding-window burst detector | ≥ `SECURITY_ALERT_THRESHOLD` events in `SECURITY_ALERT_WINDOW_SECS` → `error!` log + `alert_active` in `/status`/`/health` + event ring in `GET /security` |
+| **Soft-slashing** | Composite accountability gate | `POLICY_MIN_ACCOUNTABILITY` scores peers as *trust-decayed reputation × per-peer security-violation discount × session availability*; judgment-based denials attribute new violations. No stake locked — deferred until a market exists |
 | **DHT namespacing** | Network-id prefixed Kademlia protocol | `DHT_NETWORK_ID` isolates swarms (`/<id>/kad/1.0.0`); bootstrap + local-only via `DHT_*` |
 | **Input validation** | Length caps on pre-handshake messages | session_id <= 256 bytes, peer_id <= 512 bytes |
 | **Receipt integrity** | Ed25519 signatures | Provider signs receipts; consumers verify |
@@ -318,17 +319,19 @@ Schema is created and upgraded by versioned SQL migrations (`migrations/{postgre
 ```
 src/
 ├── lib.rs              # MetricsBackend trait (17 methods) + shared base64 utils + constant_time_eq
-├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (2134 lines)
+├── accountability.rs   # Soft-slashing: composite score (reputation × violations × availability, trust decay) gating POLICY_MIN_ACCOUNTABILITY (167 lines)
+├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (2829 lines)
 ├── models.rs           # 10 data models (NodeRow, PeerReputation, SettlementRecord, etc.)
 ├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, atomic writes + corrupt recovery (340 lines)
-├── discovery.rs        # libp2p Kademlia DHT swarm, provider discovery (DHT_* env config)
-├── tunnel.rs           # Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission (1206 lines)
+├── discovery.rs        # libp2p Kademlia DHT swarm, command channel + result events, provider/market discovery (DHT_* env config)
+├── tunnel.rs           # Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission (1230 lines)
 ├── consumer.rs         # Consumer forward listener: local apps → provider tunnel
 ├── meter.rs            # Token bucket, signed receipts, session metering
 ├── availability.rs     # Capacity engine + EWMA estimator (AVAIL_EWMA_ALPHA), session management (517 lines)
 ├── auth.rs             # Scoped API keys (API_KEYS), require_scope middleware
-├── policy.rs           # Provider admission policy (POLICY_* env): gates, quotas, RAII permits, trust decay (639 lines)
-├── security.rs         # SecurityCounters — event ring + burst alerts (SECURITY_ALERT_* env), surfaced in /status, /health, /security
+├── bidding.rs          # Marketplace bidding: sealed-bid auctions, quality-adjusted scoring, Vickrey/first-price awards, G6 wire types + signed bids (1846 lines)
+├── policy.rs           # Provider admission policy (POLICY_* env): gates, quotas, RAII permits, trust decay, soft-slashing gate (754 lines)
+├── security.rs         # SecurityCounters — event ring + burst alerts (SECURITY_ALERT_* env) + per-peer violations, surfaced in /status, /health, /security (523 lines)
 ├── migrator.rs         # Versioned SQL migrations: splitter, apply, schema_migrations
 ├── neon.rs             # PostgreSQL backend (runs migrations/postgres/*.sql)
 ├── settlement.rs       # Payout engine: receipts → idempotent settlement rows (bytes + USD)
@@ -363,8 +366,15 @@ cargo run --release
 | GET | `/status` | None | Daemon status + active sessions |
 | GET | `/health` | None | Health check (healthy/degraded/unhealthy) |
 | POST | `/match` | None | Query providers by region + min bandwidth |
+| POST | `/bid` | None | Open a marketplace auction (bandwidth request + budget cap + window) |
+| GET | `/auctions` | None | All open auctions (providers poll for work; auto-bid uses this) |
+| GET | `/auctions/:id` | None | Auction detail: sealed bids (revealed) + award once closed |
+| POST | `/auctions/:id/bid` | None | Submit a sealed bid (price ≤ auction budget cap; one per provider). Remote bids carry `provider_peer_id` + `public_key` + `signature` (ed25519 over `bid:{auction_id}:{price.to_bits()}`) — the host verifies the signature maps to the claimed PeerId |
+| POST | `/auctions/:id/close` | None | Finalize early + award winner (requester only) |
+| POST | `/auctions/:id/cancel` | None | Abort an open auction (requester only) |
+| GET | `/awards` | None | Recent auction outcomes with locked (market) prices |
 | POST | `/control` | Bearer (scope `control`) | Start/stop/restart daemon |
-| GET | `/security` | Bearer (scope `control`) | Security snapshot + last 32 security events (newest first) |
+| GET | `/security` | Bearer (scope `control`) | Security snapshot + last 32 security events (newest first) + top peers by attributed violations |
 | GET | `/settlements` | Bearer (scope `settlements`) | Payout totals + settled receipts |
 
 Bearer tokens come from `API_KEYS` (scoped) or the legacy `API_KEY`
@@ -472,6 +482,7 @@ See `GAPS.md` for the full integration status.
 | `API_KEY` | (unset) | Legacy admin API key for `/control` + `/settlements` (all scopes) |
 | `API_KEYS` | (unset) | JSON array of scoped keys: `[{"token":"…","name":"ops","scopes":["control"]}]` — scopes are `control` / `settlements`; both `API_KEY` + `API_KEYS` unset → auth disabled |
 | `POLICY_MIN_REPUTATION` | `0.0` | Admission gate: reject peers below this reputation score (0 = off) |
+| `POLICY_MIN_ACCOUNTABILITY` | `0.0` | Soft-slashing gate: reject peers whose composite score (decayed reputation × violation discount × availability history) falls below this (0 = off) |
 | `POLICY_MAX_LATENCY_MS` | `0` | Admission gate: reject peers with higher recorded RTT (0 = off) |
 | `POLICY_MAX_SESSIONS_PER_PEER` | `0` | Quota: concurrent sessions per peer id (0 = off) |
 | `POLICY_MAX_SESSIONS_PER_REGION` | `0` | Quota: concurrent sessions per region (0 = off) |
@@ -481,9 +492,18 @@ See `GAPS.md` for the full integration status.
 | `DHT_BOOTSTRAP_PEERS` | (unset) | Comma-separated multiaddrs, each ending `/p2p/<peer-id>` |
 | `DHT_NETWORK_ID` | `echo` | Namespaces the Kademlia protocol to `/<id>/kad/1.0.0` |
 | `DHT_LOCAL_ONLY` | `false` | `true` = no bootstrap (dev mode) |
+| `API_ADVERTISE_ADDR` | (unset) | Publicly reachable `http://host:port` base URL of this node's REST API, published inside DHT auction records so remote providers can submit signed bids. Falls back to the detected public IP + `LISTEN_ADDR` port; auction publishing is skipped until one is known. |
 | `RELAY_TARGET` | `127.0.0.1:80` | Target address for incoming tunnel relay |
 | `TUNNEL_ADDR` | `0.0.0.0:3002` | Tunnel listener bind address |
-| `SETTLEMENT_RATE_USD_PER_GB` | `0.50` | USD payout per GB relayed (accumulated on verified receipts) |
+| `SETTLEMENT_RATE_USD_PER_GB` | `0.50` | Default USD payout per GB relayed (flat rate; overridden per-counterparty by a marketplace award's locked price) |
+| `BID_WINDOW_SECS` | `30` | Default auction window when the requester omits `window_secs` (1..=3600) |
+| `BID_W_REPUTATION` | `0.6` | Weight of reputation in the quality-adjusted bid score (0..=1) |
+| `BID_W_LATENCY` | `0.4` | Weight of the latency factor in the bid score (0..=1) |
+| `BID_REF_LATENCY_MS` | `100` | Latency (ms) at which the bid-score latency factor is 0.5 |
+| `BID_PRICING` | `vickrey` | Locked-price rule: `vickrey` (winner paid `max(own, runner-up)` — procurement second price) or `first` (pay-your-bid) |
+| `BID_AUTO` | `false` | Provider mode: poll open auctions and auto-submit a bid at `BID_PRICE_USD_PER_GB` whenever it fits the auction's budget + capacity floor |
+| `BID_PRICE_USD_PER_GB` | (flat rate) | Auto-bid ask price (USD/GB); defaults to `SETTLEMENT_RATE_USD_PER_GB` |
+| `BID_POLL_SECS` | `3` | Auto-bid poll interval for open auctions |
 | `AVAIL_EWMA_ALPHA` | `0.3` | Availability estimator smoothing (0,1]; `1.0` disables smoothing |
 | `MATCH_MAX_STALE_SECS` | `300` | `/match`: drop capability records older than this (`0` = off) |
 | `TUNNEL_HANDSHAKE_TIMEOUT_MS` | `10000` | Handshake deadline for preamble + Noise reads + consumer dial (`0` = off) |
@@ -525,28 +545,32 @@ See `GAPS.md` for the full integration status.
 
 ## Background Tasks
 
-The daemon spawns up to 10 concurrent background tasks on startup: the eight
-core tasks below, plus a one-shot public-IP detection task and (only when
-`DASHBOARD_*` env vars are set) the optional telemetry reporter. Core tasks
-are gated on `NODE_MODE`: providers run the tunnel listener, capability
-publisher, and receipt settlement; consumers run a single forward listener
-instead (task 9).
+The daemon spawns a fixed set of background tasks on startup: the numbered
+core tasks below, the auction sweeper and market DHT sync (both node modes),
+a one-shot public-IP detection task, the `BID_AUTO` poller when enabled, and
+(only when `DASHBOARD_*` env vars are set) the optional telemetry reporter.
+Core tasks are gated on `NODE_MODE`: providers run the tunnel listener,
+capability publisher, and receipt settlement; consumers run a single forward
+listener instead (task 9).
 
 | # | Task | Line | Description |
 |---|------|------|-------------|
-| — | **Dashboard Reporter** | 1368 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
-| — | **Public IP detection** | 1565 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
-| 1 | **Tunnel Event Handler** | 1381 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
-| 2 | **Tunnel Listener** | 1448 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
-| 3 | **Discovery Event Loop** | 1521 | Runs libp2p swarm event loop, handles DHT GetProviders/PutRecord results |
-| 4 | **Discovery Event Handler** | 1526 | Processes `DiscoveryEvent::PeerFound/Disconnected/CapabilityPublished` |
-| 5 | **Heartbeat** | 1582 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
-| 6 | **Metric Cleanup** | 1589 | Removes metrics older than 30 days (daily) |
-| 7 | **Capability Publisher** | 1613 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
-| 8 | **Receipt Settlement** | 1666 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine` (event-driven, shutdown-aware) |
+| — | **Dashboard Reporter** | 1624 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
+| — | **Public IP detection** | 1900 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
+| — | **Auction sweeper** | 1541 | Every 2 s: finalizes expired auctions (Vickrey award or clean expiry) — the `bidding.rs` deadline sweep |
+| 1 | **Tunnel Event Handler** | 1637 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
+| 2 | **Tunnel Listener** | 1704 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
+| 3 | **Discovery Event Loop** | 1777 | Runs the libp2p swarm event loop; executes `DiscoveryCommand` (PutRecord/GetRecord/StartProviding/GetProviders) and emits the matching `DiscoveryEvent` results |
+| 4 | **Discovery Event Handler** | 1791 | Routes `PeerFound/PeerDisconnected` and, for G6, `auction/…` + `award/…` records into the foreign auction book / award log, chaining follow-up DHT lookups (index → auction) |
+| 5 | **Heartbeat** | 1917 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
+| 6 | **Metric Cleanup** | 1924 | Removes metrics older than 30 days (daily) |
+| 7 | **Capability Publisher** | 1948 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
+| 8 | **Receipt Settlement** | 2013 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine`; looks up award-locked market prices (G6) before falling back to the flat rate |
 | 9 | **Consumer Listener** | `consumer.rs` (consumer only) | Accepts local app connections on `CONSUMER_LISTEN_ADDR`, dials the provider (`connect_to_provider`), relays app traffic through the Noise tunnel without issuing consumer receipts |
+| 10 | **Market DHT sync** | 2165 | (G6) Publishes this node's open-auction records + `auctions_by_host` index + region announce every 10s and pending award notices every 2s to Kademlia; skips publishing until an advertise API address (`API_ADVERTISE_ADDR` or detected public IP + port) is known |
+| — | **Marketplace auto-bid** | 2319 (`BID_AUTO=true`, provider) | Polls local `GET /auctions` **and** DHT-discovered remote auctions (exact region match), submitting bids — signed ed25519 payloads for remote hosts |
 
-Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 1844).
+Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 2539).
 
 ## Consumer Mode Quick Start
 
@@ -567,6 +591,61 @@ The provider's Noise public key can be decoded from its capability record
 (`/match` against the provider or `capability_descriptors` table); the base64
 value must decode to exactly 32 bytes.
 
+## Marketplace Bidding (Price Discovery)
+
+`/match` answers *"who can serve me?"* — the bidding engine answers *"at
+what price?"*. A consumer opens an auction with a bandwidth requirement and
+a budget cap; providers submit sealed bids; when the window closes the
+highest quality-adjusted bid wins and the price is locked for settlement:
+
+```mermaid
+sequenceDiagram
+    participant C as Consumer
+    participant M as Auction (BidEngine)
+    participant P1 as Provider A
+    participant P2 as Provider B
+
+    C->>M: POST /bid {region, bw, max $/GB, window}
+    M-->>C: auction_id + closes_at
+    P1->>M: GET /auctions (poll / BID_AUTO)
+    P1->>M: POST /auctions/:id/bid {$0.40}
+    P2->>M: POST /auctions/:id/bid {$0.35}
+    Note over M: deadline sweep (every 2s)<br/>score = (w·reputation + w·latency)/price<br/>Vickrey: locked = max(winner, runner-up)
+    M-->>C: GET /auctions/:id → award {winner, $0.40}
+    Note over M: Receipts for C settle at $0.40/GB<br/>(not the flat SETTLEMENT_RATE_USD_PER_GB)
+```
+
+- **Sealed bids, one per provider, budget cap absolute** — a bid above the
+  auction's `max_price_usd_per_gb` is rejected; closing/cancelling is
+  requester-only; `POLICY_BLOCKED_PEERS` can neither open nor bid.
+- **Quality-adjusted scoring** — `BID_W_REPUTATION` / `BID_W_LATENCY`
+  weights so a cheap-but-flaky provider loses to a fair-priced reliable
+  one (`BID_REF_LATENCY_MS` sets the latency half-score point).
+- **Vickrey by default** (`BID_PRICING=vickrey`) — winner paid
+  `max(own bid, runner-up bid)`: the competitive second price, never below
+  what they asked; `BID_PRICING=first` = pay-your-bid.
+- **Market price flows into settlement** — receipts whose counterparty won
+  an auction settle at the award's locked USD/GB price
+  (`settle_receipt_at_price`), falling back to `SETTLEMENT_RATE_USD_PER_GB`
+  when no award exists.
+- **`BID_AUTO=true`** (provider mode) — polls `GET /auctions` every
+  `BID_POLL_SECS` and submits `BID_PRICE_USD_PER_GB` when the auction's
+  budget and capacity floor fit; this is what makes isolated nodes behave
+  like a live market.
+- Auction state is **in-memory and ephemeral** (seconds-long windows,
+  swept every 2 s); the award log is the durable price-discovery output.
+- **Cross-node propagation (G6)** — open auctions are published to the
+  Kademlia DHT (`auction/{id}` + `auctions_by_host/{host}` records,
+  providers announce via `auctions/{region}`) and auto-bidding providers on
+  other hosts discover them and submit **signed** bids over HTTP
+  (`POST /auctions/:id/bid` with `provider_peer_id` + `public_key` +
+  `signature`; the host verifies the ed25519 signature maps to the claimed
+  PeerId). At close the host publishes `award/{consumer}/{winner}`; the
+  winning provider imports it so **subsequent** receipts settle at the
+  locked market price. Set `API_ADVERTISE_ADDR` so remote bidders can reach
+  your REST API. Known limits (reachability, self-attested awards,
+  post-import repricing only, exact-region match) — see `GAPS.md` G6.
+
 ## Architecture Decisions
 
 | Decision | Rationale |
@@ -583,6 +662,10 @@ value must decode to exactly 32 bytes.
 | **Idle-time trust decay** | Reputation gates on a half-life-decayed score so a peer can't coast forever on one old good session |
 | **EWMA availability** | Smooths advertised capacity so single noisy sysinfo samples don't bounce the DHT record |
 | **Security event ring + burst alerts** | Bounded in-memory event log for `GET /security`; windowed threshold turns repeated abuse into one loud `error!` instead of log spam |
+| **Soft-slashing before staking** | Reputation + security violations + availability history + trust decay already form an economic accountability loop; real stake only makes sense once a market is worth slashing |
+| **Sealed-bid auctions over listed prices** | `/match` finds capacity; sealed bids with a budget cap + quality-adjusted scoring discover price. Vickrey payout keeps providers truthful; awards flow into settlement so money moves at market rates |
+| **DHT for discovery, HTTP for bids** | Kademlia propagates *which* auctions exist (records are one-per-key — it cannot collect bid sets), while bids ride plain HTTP to the auction host with ed25519 signatures so reputation attributes to the real peer; award notices are DHT records the winner watches for itself |
+| **Ephemeral auction state** | Auctions live seconds-to-minutes — kept in memory (swept every 2 s), while the award log is the durable, settlement-grade price record |
 | **Durable telemetry queue** | Frames drop-oldest in memory, back off exponentially on failure, and spill to a disk spool so no heartbeat data is lost across restarts |
 | **Token bucket backpressure** | Sleep-based backpressure is simpler than channel-based flow control |
 | **PeerId-based reputation** | Stable identity across sessions (vs. SocketAddr which changes) |

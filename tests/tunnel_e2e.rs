@@ -424,3 +424,155 @@ async fn stalled_handshake_is_timed_out_and_counted() {
 
     listener_task.abort();
 }
+
+/// Soft-slashing gate wiring: with `POLICY_MIN_ACCOUNTABILITY` active, an
+/// unknown peer (fresh DB ⇒ composite score 0.0) must be denied **after**
+/// the Noise handshake completes, counted as a policy rejection, and have a
+/// per-peer violation attributed for future accountability scoring.
+#[tokio::test]
+async fn accountability_gate_denies_and_attributes_violation() {
+    let dir = TempDir::new().unwrap();
+    let provider =
+        NodeIdentity::load_or_generate(&dir.path().join("provider.json"), "us-test").unwrap();
+    let consumer =
+        NodeIdentity::load_or_generate(&dir.path().join("consumer.json"), "us-test").unwrap();
+    let provider_peer_id: libp2p::PeerId = provider.peer_id_str().parse().unwrap();
+    let consumer_peer_id: libp2p::PeerId = consumer.peer_id_str().parse().unwrap();
+
+    let db_path = format!("sqlite:{}", dir.path().join("softslash.db").display());
+    let backend = Arc::new(SqliteStore::new(&db_path).await.unwrap());
+    let availability = Arc::new(RwLock::new(AvailabilityEngine::new(100.0, 100.0, 10)));
+    let (metering, _receipt_rx) = MeteringEngine::with_config(provider.clone(), 1, 0);
+
+    // One shared counter set (accept-side denial must be visible to us).
+    let security = Arc::new(SecurityCounters::default());
+    // Unreachable gate for an unknown peer: soft-slash score = 0.0 < 0.99.
+    let policy = echo_daemon::policy::PolicyEngine::new(echo_daemon::policy::PolicyConfig {
+        min_accountability: 0.99,
+        ..Default::default()
+    });
+
+    let relay_config = RelayConfig {
+        backend: backend.clone(),
+        metering: metering.clone(),
+        availability: availability.clone(),
+        target_addr: "127.0.0.1:1".to_string(), // never reached
+        local_peer_id: provider.peer_id_str().to_string(),
+        max_upload_mbps: 10.0,
+        max_download_mbps: 10.0,
+        policy: Some(policy),
+        security: security.clone(),
+        handshake_timeout_ms: 10_000,
+    };
+    let (provider_svc, _events) = TunnelService::new(
+        provider_peer_id,
+        metering.clone(),
+        availability.clone(),
+        relay_config,
+        4,
+        provider.noise_secret_key_bytes().to_vec(),
+    );
+
+    let tunnel_addr = format!("127.0.0.1:{}", free_port().await);
+    let accept_config = RelayConfig {
+        backend: provider_svc.relay_config().backend.clone(),
+        metering: provider_svc.relay_config().metering.clone(),
+        availability: provider_svc.relay_config().availability.clone(),
+        target_addr: provider_svc.relay_config().target_addr.clone(),
+        local_peer_id: provider_svc.relay_config().local_peer_id.clone(),
+        max_upload_mbps: provider_svc.relay_config().max_upload_mbps,
+        max_download_mbps: provider_svc.relay_config().max_download_mbps,
+        policy: provider_svc.relay_config().policy.clone(),
+        security: provider_svc.relay_config().security.clone(),
+        handshake_timeout_ms: provider_svc.relay_config().handshake_timeout_ms,
+    };
+    let listener_addr = tunnel_addr.clone();
+    let listener_task = tokio::spawn(async move {
+        TunnelService::accept_incoming(
+            &listener_addr,
+            provider_svc.event_tx().clone(),
+            accept_config,
+            provider_svc.conn_semaphore(),
+            provider_svc.static_private_key(),
+        )
+        .await
+        .expect("tunnel listener should bind");
+    });
+
+    // Consumer: full Noise handshake (the gate runs only after msg3).
+    let consumer_metering = MeteringEngine::new(consumer.clone()).0;
+    let consumer_avail = Arc::new(RwLock::new(AvailabilityEngine::new(0.0, 0.0, 4)));
+    let consumer_config = RelayConfig {
+        backend: backend.clone(),
+        metering: consumer_metering.clone(),
+        availability: consumer_avail.clone(),
+        target_addr: "127.0.0.1:1".to_string(),
+        local_peer_id: consumer.peer_id_str().to_string(),
+        max_upload_mbps: 0.0,
+        max_download_mbps: 0.0,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 10_000,
+    };
+    let (consumer_svc, _consumer_events) = TunnelService::new(
+        consumer_peer_id,
+        consumer_metering,
+        consumer_avail,
+        consumer_config,
+        4,
+        consumer.noise_secret_key_bytes().to_vec(),
+    );
+
+    let session_id = "softslash-session-0001";
+    let expected_key = provider.noise_public_key_bytes().to_vec();
+    let mut session = None;
+    for attempt in 0..5 {
+        match consumer_svc
+            .connect_to_provider(&tunnel_addr, provider_peer_id, session_id, &expected_key)
+            .await
+        {
+            Ok(s) => {
+                session = Some(s);
+                break;
+            }
+            Err(e) => {
+                assert!(attempt < 4, "handshake failed after 5 attempts: {e:?}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+    let mut session = session.expect("handshake completes — the policy gate runs after msg3");
+
+    // The provider applies the gate post-handshake and drops the connection:
+    // the consumer must observe a closed tunnel, not a hang.
+    let mut buf = [0u8; 16];
+    let closed = tokio::time::timeout(Duration::from_secs(5), session.stream.read(&mut buf))
+        .await
+        .expect("provider must drop the policy-denied session promptly");
+    match closed {
+        Ok(0) | Err(_) => {} // clean FIN or RST — either is a close
+        Ok(n) => panic!("unexpected data from provider after denial: {n} bytes"),
+    }
+
+    // Give the accept task a moment to record the denial.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let snap = security.snapshot();
+    assert!(
+        snap.policy_rejections >= 1,
+        "soft-slashing gate must count the denial: {snap:?}"
+    );
+    assert_eq!(
+        security.peer_violation_count(consumer.peer_id_str()),
+        1,
+        "judgment-based denial must attribute a violation to the authenticated peer"
+    );
+    assert!(
+        security
+            .recent_events(8)
+            .iter()
+            .any(|e| e.kind == "policy_rejection"),
+        "event ring should record the denial"
+    );
+
+    listener_task.abort();
+}

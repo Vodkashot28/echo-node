@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::availability::AvailabilityEngine;
 use crate::meter::{MeteringEngine, TokenBucket};
-use crate::policy::{PeerFacts, PolicyEngine, PolicyPermit};
+use crate::policy::{PeerFacts, PolicyEngine, PolicyPermit, PolicyViolation};
 use crate::security::SecurityCounters;
 use crate::{ConnectionRecord, MetricsBackend, PeerReputation};
 
@@ -676,6 +676,17 @@ impl TunnelService {
                     reputation_score: reputation.as_ref().map(|r| r.reputation_score),
                     avg_latency_ms: reputation.as_ref().map(|r| r.avg_latency_ms),
                     idle_secs,
+                    // Soft-slashing inputs: violations already attributed to
+                    // this peer + the provider's recorded session outcomes.
+                    violations: config.security.peer_violation_count(&remote_peer_id_str),
+                    successful_sessions: reputation
+                        .as_ref()
+                        .map(|r| r.successful_sessions)
+                        .unwrap_or(0),
+                    failed_sessions: reputation
+                        .as_ref()
+                        .map(|r| r.failed_sessions)
+                        .unwrap_or(0),
                 };
                 match policy.admit(&remote_peer_id_str, &facts, &region) {
                     Ok(permit) => Some(permit),
@@ -683,6 +694,19 @@ impl TunnelService {
                         config.security.inc_policy_rejection(&format!(
                             "peer {remote_peer_id_str}: {violation}"
                         ));
+                        // Judgment-based denials (blacklist / reputation /
+                        // soft-slashing score) are the peer's own record —
+                        // attribute them for future accountability scoring.
+                        // Quota and latency denials are transient/honest and
+                        // deliberately NOT counted against the peer.
+                        if matches!(
+                            violation,
+                            PolicyViolation::BlockedPeer
+                                | PolicyViolation::LowReputation { .. }
+                                | PolicyViolation::LowAccountability { .. }
+                        ) {
+                            config.security.note_peer_violation(&remote_peer_id_str);
+                        }
                         warn!(
                             session = %session_id,
                             peer = %remote_peer_id_str,

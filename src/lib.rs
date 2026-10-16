@@ -1,5 +1,7 @@
+pub mod accountability;
 pub mod auth;
 pub mod availability;
+pub mod bidding;
 pub mod consumer;
 pub mod discovery;
 pub mod identity;

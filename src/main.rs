@@ -1,12 +1,18 @@
 use echo_daemon::auth::{require_scope, ApiKeyRegistry, AuthGate, Scope};
 use echo_daemon::availability::AvailabilityEngine;
+use echo_daemon::bidding::{
+    award_key, auction_key, decode_auction_index, encode_auction_index, host_index_key,
+    region_providers_key, sign_bid, verify_signed_bid, Auction, AuctionBook, AuctionRecord, Award,
+    Bid, BidConfig, BidEngine, BidError, CreateAuction, SubmitBid, MAX_AUCTION_INDEX_IDS,
+    MAX_AUCTION_WINDOW_SECS, MAX_PRICE_USD_PER_GB, MIN_PRICE_USD_PER_GB,
+};
 use echo_daemon::consumer::run_consumer_listener;
-use echo_daemon::discovery::{DiscoveryConfig, DiscoveryService};
+use echo_daemon::discovery::{DiscoveryCommand, DiscoveryConfig, DiscoveryService};
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
 use echo_daemon::neon;
 use echo_daemon::policy::{PolicyConfig, PolicyEngine};
-use echo_daemon::security::{SecurityCounters, SecurityEvent, SecuritySnapshot};
+use echo_daemon::security::{PeerViolation, SecurityCounters, SecurityEvent, SecuritySnapshot};
 use echo_daemon::settlement::SettlementEngine;
 use echo_daemon::sqlite_store;
 use echo_daemon::tunnel::TunnelService;
@@ -18,7 +24,7 @@ use echo_daemon::{
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Json, State},
+    extract::{Json, Path, State},
     http::StatusCode,
     middleware,
     routing::{get, post},
@@ -74,6 +80,26 @@ const DEFAULT_SETTLEMENT_RATE_USD_PER_GB: f64 = 0.50;
 const DEFAULT_UNHEALTHY_THRESHOLD_SECS: u64 = 30;
 const DEFAULT_CONSUMER_LISTEN_ADDR: &str = "127.0.0.1:3003";
 const NOISE_PUBKEY_LEN: usize = 32;
+
+// ── G6 marketplace DHT sync — wire-traffic bounds (not env-tunable) ──
+/// Lifetime of `auction/*` and `award/*` value records on the DHT.
+const DHT_MARKET_RECORD_TTL_SECS: u64 = 45;
+/// Republish open auctions + the host index while we host any.
+const DHT_AUCTION_PUBLISH_INTERVAL_SECS: u64 = 10;
+/// Sweep for newly finalized awards to publish.
+const DHT_AWARD_PUBLISH_INTERVAL_SECS: u64 = 2;
+/// Hosts fetched per region provider lookup (bounds chained queries).
+const MAX_DHT_PROVIDERS_PER_QUERY: usize = 16;
+/// Per-counterparty cooldown between DHT award lookups from settlement.
+const AWARD_LOOKUP_COOLDOWN_SECS: u64 = 120;
+/// Cap on the award-lookup cooldown map.
+const MAX_AWARD_LOOKUPS: usize = 512;
+/// Awards republished from the log after a restart (bounded boot burst).
+const MAX_AWARD_PUBLISH_BATCH: usize = 128;
+/// HTTP timeout for signed remote bids.
+const REMOTE_BID_TIMEOUT_SECS: u64 = 3;
+/// Auto-bid remote-dedupe map cap (entries age out with auction windows).
+const MAX_BID_TRACK: usize = 4096;
 
 /// Runtime configuration parsed from environment variables.
 struct Config {
@@ -371,6 +397,8 @@ struct AppState {
     /// (`0` disables). Stale rows advertise capacity the provider may no
     /// longer have.
     match_max_stale_secs: u64,
+    /// Marketplace bidding engine (sealed-bid auctions, price discovery).
+    bid_engine: Arc<BidEngine>,
 }
 
 impl MetricsState {
@@ -1172,18 +1200,192 @@ async fn handle_match_providers(
     }
 }
 
+// ──────────────────────────────────────────────────────────────
+// Marketplace bidding endpoints (price discovery)
+// ──────────────────────────────────────────────────────────────
+
+/// Map engine rejections to HTTP status codes.
+fn bid_err_to_http(err: BidError) -> (StatusCode, String) {
+    let status = match &err {
+        BidError::Invalid(_) | BidError::BudgetExceeded { .. } => StatusCode::BAD_REQUEST,
+        BidError::NotFound(_) => StatusCode::NOT_FOUND,
+        BidError::Closed(_) | BidError::DuplicateBid | BidError::TooManyBids => StatusCode::CONFLICT,
+        BidError::NotRequester | BidError::Blocked => StatusCode::FORBIDDEN,
+    };
+    (status, err.to_string())
+}
+
+#[derive(Debug, Serialize)]
+struct AuctionListResponse {
+    auctions: Vec<Auction>,
+    count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct AwardListResponse {
+    awards: Vec<Award>,
+    count: usize,
+}
+
+/// `POST /bid` — open a new auction (the consumer's bandwidth request).
+async fn handle_create_auction(
+    State(app): State<AppState>,
+    Json(req): Json<CreateAuction>,
+) -> Result<Json<Auction>, (StatusCode, String)> {
+    let auction = app
+        .bid_engine
+        .create_auction(req, &app.local_peer_id, now_epoch_secs())
+        .map_err(bid_err_to_http)?;
+    Ok(Json(auction))
+}
+
+/// `GET /auctions` — every open auction (providers poll this to find work).
+async fn handle_list_auctions(State(app): State<AppState>) -> Json<AuctionListResponse> {
+    let mut auctions = app.bid_engine.open_auctions();
+    auctions.sort_by_key(|a| std::cmp::Reverse(a.created_at));
+    let count = auctions.len();
+    Json(AuctionListResponse { auctions, count })
+}
+
+/// `GET /auctions/:id` — full auction state: bids (revealed) + award.
+async fn handle_get_auction(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Auction>, (StatusCode, String)> {
+    app.bid_engine
+        .get_auction(&id)
+        .map(Json)
+        .ok_or_else(|| bid_err_to_http(BidError::NotFound(id)))
+}
+
+/// `POST /auctions/:id/bid` — submit a sealed bid. Local (unsigned) bids
+/// are attributed to this node exactly as before (pre-G6); a signed
+/// payload proves a remote provider's ed25519 identity, so the host can
+/// attribute — and reputation-score — a bidder it has never met. Snapshots
+/// come from *this host's* records for the verified peer, keeping scoring
+/// deterministic per bid.
+async fn handle_submit_bid(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<SubmitBid>,
+) -> Result<Json<Bid>, (StatusCode, String)> {
+    let signed = [
+        req.provider_peer_id.is_some(),
+        req.public_key.is_some(),
+        req.signature.is_some(),
+    ];
+    let (peer, reputation, latency_ms) = if signed.iter().any(|&p| p) {
+        // Remote signed bid: all three fields or none.
+        if !signed.iter().all(|&p| p) {
+            return Err(bid_err_to_http(BidError::Invalid(
+                "signed bid requires provider_peer_id, public_key and signature together"
+                    .into(),
+            )));
+        }
+        let peer = verify_signed_bid(
+            &id,
+            req.price_usd_per_gb,
+            req.provider_peer_id.as_deref().unwrap_or_default(),
+            req.public_key.as_deref().unwrap_or_default(),
+            req.signature.as_deref().unwrap_or_default(),
+        )
+        .map_err(bid_err_to_http)?;
+        // DB-sourced snapshots for the *verified* peer; a stranger with
+        // no history scores as unknown (rep 0, neutral latency) rather
+        // than best-case.
+        let reputation = app
+            .backend
+            .get_peer_reputation(&peer)
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.reputation_score)
+            .unwrap_or(0.0);
+        let latency_ms = app
+            .backend
+            .get_capability_for_peer(&peer)
+            .await
+            .ok()
+            .flatten()
+            .map(|c| c.avg_latency_ms)
+            .unwrap_or_else(|| app.bid_engine.config().ref_latency_ms);
+        (peer, reputation, latency_ms)
+    } else {
+        // Legacy local attribution (pre-G6 behavior).
+        let peer = app.local_peer_id.clone();
+        let reputation = app
+            .backend
+            .get_peer_reputation(&peer)
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.reputation_score)
+            .unwrap_or(0.0);
+        let latency_ms = app
+            .backend
+            .get_capability_for_peer(&peer)
+            .await
+            .ok()
+            .flatten()
+            .map(|c| c.avg_latency_ms)
+            .unwrap_or(0.0);
+        (peer, reputation, latency_ms)
+    };
+    let bid = app
+        .bid_engine
+        .submit_bid(&id, &peer, req.price_usd_per_gb, reputation, latency_ms, now_epoch_secs())
+        .map_err(bid_err_to_http)?;
+    Ok(Json(bid))
+}
+
+/// `POST /auctions/:id/close` — finalize early and award the winner
+/// (requester only).
+async fn handle_close_auction(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Auction>, (StatusCode, String)> {
+    let auction = app
+        .bid_engine
+        .close_auction(&id, &app.local_peer_id, now_epoch_secs())
+        .map_err(bid_err_to_http)?;
+    Ok(Json(auction))
+}
+
+/// `POST /auctions/:id/cancel` — abort an open auction (requester only).
+async fn handle_cancel_auction(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Auction>, (StatusCode, String)> {
+    let auction = app
+        .bid_engine
+        .cancel_auction(&id, &app.local_peer_id)
+        .map_err(bid_err_to_http)?;
+    Ok(Json(auction))
+}
+
+/// `GET /awards` — recent auction outcomes (locked market prices).
+async fn handle_list_awards(State(app): State<AppState>) -> Json<AwardListResponse> {
+    let awards = app.bid_engine.recent_awards(32);
+    let count = awards.len();
+    Json(AwardListResponse { awards, count })
+}
+
 /// Admin observability: full security snapshot + the most recent security
-/// events (newest first). Gated behind the `control` scope.
+/// events (newest first) + the dirtiest peers by attributed violations
+/// (soft-slashing input, `accountability.rs`). Gated behind the `control`
+/// scope.
 #[derive(Debug, Serialize)]
 struct SecurityReport {
     snapshot: SecuritySnapshot,
     recent_events: Vec<SecurityEvent>,
+    peer_violations: Vec<PeerViolation>,
 }
 
 async fn handle_security(State(app): State<AppState>) -> Json<SecurityReport> {
     Json(SecurityReport {
         snapshot: app.security.snapshot(),
         recent_events: app.security.recent_events(32),
+        peer_violations: app.security.top_peer_violations(32),
     })
 }
 
@@ -1312,6 +1514,60 @@ async fn main() -> Result<()> {
         );
         Some(PolicyEngine::new(policy_config))
     };
+
+    // Step 3.7: Marketplace bidding engine (sealed-bid auctions with
+    // quality-adjusted winner selection + Vickrey pricing). Shares the
+    // policy engine's blocked-peer list so blacklisted peers can neither
+    // open auctions nor bid on them.
+    let bid_engine = Arc::new(BidEngine::new(BidConfig::from_env_with_blocked(
+        blocked_peers.as_ref().clone(),
+    )));
+    {
+        let cfg = bid_engine.config();
+        info!(
+            default_window_secs = cfg.default_window_secs,
+            w_reputation = cfg.w_reputation,
+            w_latency = cfg.w_latency,
+            pricing = ?cfg.pricing,
+            "marketplace bidding engine ready"
+        );
+    }
+
+    // Step 3.8: Auction sweeper — finalizes auctions past their deadline
+    // (award winner or expire). Runs in both node modes: consumers open
+    // auctions, providers bid on them; either may need finalization.
+    {
+        let engine = bid_engine.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tick.tick().await;
+                for auction in engine.expire_stale(now_epoch_secs()) {
+                    match auction.status {
+                        echo_daemon::bidding::AuctionStatus::Awarded => {
+                            let award = auction.award.expect("awarded auction has award");
+                            info!(
+                                auction = %auction.id,
+                                provider = %award.provider_peer_id,
+                                price = award.price_usd_per_gb,
+                                bids = auction.bids.len(),
+                                "auction closed at deadline"
+                            );
+                        }
+                        echo_daemon::bidding::AuctionStatus::Expired => {
+                            debug!(auction = %auction.id, "auction expired with no bids");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+    }
+
+    // Step 3.85: Foreign auction book — auctions discovered over the DHT
+    // (G6 cross-node marketplace). Kept apart from the local sealed-bid
+    // registry: we bid on these remotely over signed HTTP.
+    let auction_book = Arc::new(AuctionBook::new());
 
     // Step 4: Initialize metering engine
     let (metering, receipt_rx) = MeteringEngine::with_config(
@@ -1499,7 +1755,7 @@ async fn main() -> Result<()> {
     // Step 5: Initialize discovery (libp2p swarm) — DHT_* env config:
     // bootstrap peers, network id namespace, optional local-only dev mode.
     let discovery_config = DiscoveryConfig::from_env();
-    let (mut discovery, mut discovery_rx) = DiscoveryService::new(
+    let (mut discovery, discovery_cmd, mut discovery_rx) = DiscoveryService::new(
         &identity,
         &discovery_config,
     )
@@ -1522,22 +1778,101 @@ async fn main() -> Result<()> {
         discovery.run().await;
     });
 
-    // Spawn discovery event handler
-    tokio::spawn(async move {
-        while let Some(event) = discovery_rx.recv().await {
-            match event {
-                echo_daemon::discovery::DiscoveryEvent::PeerFound(peer_id, addr) => {
-                    info!(peer = %peer_id, addr = %addr, "peer discovered via DHT");
-                }
-                echo_daemon::discovery::DiscoveryEvent::PeerDisconnected(peer_id) => {
-                    info!(peer = %peer_id, "peer disconnected");
-                }
-                echo_daemon::discovery::DiscoveryEvent::CapabilityPublished => {
-                    debug!("capability published to DHT");
+    // Spawn discovery event handler — routes market records (G6) into the
+    // foreign auction book / award log and chains follow-up DHT lookups.
+    // Kademlia has no prefix queries, so discovery walks explicit keys:
+    //   providers(auctions/<region>) → index(auctions_by_host/<host>)
+    //     → records(auction/<id>)
+    {
+        let cmd = discovery_cmd.clone();
+        let engine = bid_engine.clone();
+        let book = auction_book.clone();
+        let self_peer = identity.peer_id_str().to_string();
+        tokio::spawn(async move {
+            while let Some(event) = discovery_rx.recv().await {
+                match event {
+                    echo_daemon::discovery::DiscoveryEvent::PeerFound(peer_id, addr) => {
+                        info!(peer = %peer_id, addr = %addr, "peer discovered via DHT");
+                    }
+                    echo_daemon::discovery::DiscoveryEvent::PeerDisconnected(peer_id) => {
+                        info!(peer = %peer_id, "peer disconnected");
+                    }
+                    echo_daemon::discovery::DiscoveryEvent::RecordPublished { key } => {
+                        debug!(key, "record published to DHT");
+                    }
+                    echo_daemon::discovery::DiscoveryEvent::RecordFound { key, value } => {
+                        if let Some(id) = key.strip_prefix("auction/") {
+                            // An open auction published by its consumer host.
+                            match AuctionRecord::from_bytes(&value) {
+                                Ok(rec) => {
+                                    let now = now_epoch_secs();
+                                    if rec.requester_peer_id == self_peer {
+                                        debug!(auction = id, "skipped our own DHT auction record");
+                                    } else if book.upsert(rec, &self_peer, now) {
+                                        info!(auction = id, "foreign auction imported from DHT");
+                                    }
+                                }
+                                Err(e) => debug!(auction = id, error = %e, "bad auction record"),
+                            }
+                        } else if let Some(host) = key.strip_prefix("auctions_by_host/") {
+                            // A host's index of its open auction ids →
+                            // fetch each record we don't have yet.
+                            match decode_auction_index(&value) {
+                                Ok(ids) => {
+                                    let now = now_epoch_secs();
+                                    for id in ids {
+                                        if !book.contains(&id) && !book.recently_rejected(&id, now)
+                                        {
+                                            let _ = cmd.send(DiscoveryCommand::GetRecord {
+                                                key: auction_key(&id),
+                                            });
+                                        }
+                                    }
+                                }
+                                Err(e) => debug!(host, error = %e, "bad auction index record"),
+                            }
+                        } else if key.strip_prefix("award/").is_some() {
+                            // A finalized award we (the provider) won —
+                            // unlocks locked-price settlement for that
+                            // consumer's receipts.
+                            if value.len() > 1024 {
+                                debug!(key, "award record too large; ignored");
+                            } else {
+                                match serde_json::from_slice::<Award>(&value) {
+                                    Ok(award) => {
+                                        if engine.import_foreign_award(award, &self_peer) {
+                                            debug!(key, "award imported from DHT");
+                                        }
+                                    }
+                                    Err(e) => debug!(key, error = %e, "bad award record"),
+                                }
+                            }
+                        } else {
+                            debug!(key, "unrecognized DHT record key");
+                        }
+                    }
+                    echo_daemon::discovery::DiscoveryEvent::RecordNotFound { key } => {
+                        debug!(key, "no DHT record for key");
+                    }
+                    echo_daemon::discovery::DiscoveryEvent::ProvidersFound { key, providers } => {
+                        // Region host lookup → chain one index fetch per host.
+                        if key.strip_prefix("auctions/").is_some() {
+                            for peer in providers
+                                .into_iter()
+                                .take(MAX_DHT_PROVIDERS_PER_QUERY)
+                            {
+                                let _ = cmd.send(DiscoveryCommand::GetRecord {
+                                    key: host_index_key(&peer.to_string()),
+                                });
+                            }
+                        } else {
+                            debug!(key, count = providers.len(), "providers found via DHT");
+                        }
+                    }
                 }
             }
-        }
-    });
+        });
+    }
 
     // Step 6: Spawn heartbeat
     let heartbeat_secs = config.heartbeat_secs;
@@ -1663,6 +1998,18 @@ async fn main() -> Result<()> {
         let receipt_signer_key = identity.public_key_bytes.clone();
         let receipt_settlement = settlement_engine.clone();
         let security_clone = security.clone();
+        // Market-discovered prices: receipts whose counterparty (the
+        // consumer) won a marketplace auction here settle at the award's
+        // locked USD/GB price instead of the flat SETTLEMENT_RATE_USD_PER_GB.
+        let bid_pricing = bid_engine.clone();
+        // G6: a counterparty's first receipt triggers a DHT lookup for the
+        // award record (published by its consumer host). Cooldown-bounded;
+        // an imported award reprices *subsequent* settlements.
+        let award_lookup_cmd = discovery_cmd.clone();
+        let award_lookup_peer = identity.peer_id_str().to_string();
+        let award_cooldown = Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::<String, u64>::new(),
+        ));
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -1677,7 +2024,12 @@ async fn main() -> Result<()> {
                                         error!(error = %e, "receipt flush failed during shutdown");
                                     } else {
                                         count += 1;
-                                        if let Err(e) = receipt_settlement.settle_receipt(receipt).await {
+                                        let market_price =
+                                            bid_pricing.awarded_price_for(&receipt.counterparty_peer_id);
+                                        if let Err(e) = receipt_settlement
+                                            .settle_receipt_at_price(receipt, market_price)
+                                            .await
+                                        {
                                             error!(error = %e, "receipt settlement flush failed during shutdown");
                                         }
                                     }
@@ -1719,8 +2071,45 @@ async fn main() -> Result<()> {
                                                 seq = receipt.sequence_number,
                                                 "receipt settled"
                                             );
-                                            // Accumulate the verified receipt toward payout.
-                                            if let Err(e) = receipt_settlement.settle_receipt(receipt).await {
+                                            // G6: cooldown-bounded DHT award
+                                            // lookup for this counterparty.
+                                            {
+                                                let mut map = award_cooldown
+                                                    .lock()
+                                                    .expect("award cooldown lock poisoned");
+                                                let now = now_epoch_secs();
+                                                let cooled = map
+                                                    .get(&receipt.counterparty_peer_id)
+                                                    .is_none_or(|t| {
+                                                        now.saturating_sub(*t)
+                                                            >= AWARD_LOOKUP_COOLDOWN_SECS
+                                                    });
+                                                if cooled {
+                                                    if map.len() >= MAX_AWARD_LOOKUPS {
+                                                        map.clear();
+                                                    }
+                                                    map.insert(
+                                                        receipt.counterparty_peer_id.clone(),
+                                                        now,
+                                                    );
+                                                    let _ = award_lookup_cmd
+                                                        .send(DiscoveryCommand::GetRecord {
+                                                            key: award_key(
+                                                                &receipt.counterparty_peer_id,
+                                                                &award_lookup_peer,
+                                                            ),
+                                                        });
+                                                }
+                                            }
+                                            // Accumulate the verified receipt toward payout
+                                            // at the market price when this counterparty
+                                            // won an auction, else the flat rate.
+                                            let market_price = bid_pricing
+                                                .awarded_price_for(&receipt.counterparty_peer_id);
+                                            if let Err(e) = receipt_settlement
+                                                .settle_receipt_at_price(receipt, market_price)
+                                                .await
+                                            {
                                                 error!(error = %e, "payout accumulation failed");
                                             }
                                         }
@@ -1755,6 +2144,301 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+
+    // Step 9.45: Marketplace DHT sync (G6) — publish what only we can:
+    // our open auctions + host/region indexes (10 s refresh against a
+    // 45 s record TTL) and newly finalized awards we requested (2 s
+    // catch-up cursor). Auction *discovery* lives in the auto-bid task.
+    {
+        let engine = bid_engine.clone();
+        let cmd = discovery_cmd.clone();
+        let self_peer = identity.peer_id_str().to_string();
+        let listen_port = config
+            .listen_addr
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse::<u16>().ok());
+        let advertise_override = std::env::var("API_ADVERTISE_ADDR")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let state_ip = state.clone();
+        tokio::spawn(async move {
+            let mut award_cursor = 0usize;
+            let mut award_tick =
+                tokio::time::interval(Duration::from_secs(DHT_AWARD_PUBLISH_INTERVAL_SECS));
+            let mut publish_tick =
+                tokio::time::interval(Duration::from_secs(DHT_AUCTION_PUBLISH_INTERVAL_SECS));
+            loop {
+                tokio::select! {
+                    _ = award_tick.tick() => {
+                        let (fresh, next) = engine.awards_from(award_cursor);
+                        award_cursor = next;
+                        // A restart begins at cursor 0 — cap the boot burst
+                        // so a long award log can't flood the DHT.
+                        let start = fresh.len().saturating_sub(MAX_AWARD_PUBLISH_BATCH);
+                        for award in &fresh[start..] {
+                            if award.requester_peer_id != self_peer {
+                                continue; // only publish awards we requested
+                            }
+                            match serde_json::to_vec(award) {
+                                Ok(value) => {
+                                    let _ = cmd.send(DiscoveryCommand::PutRecord {
+                                        key: award_key(
+                                            &award.requester_peer_id,
+                                            &award.provider_peer_id,
+                                        ),
+                                        value,
+                                        ttl: Some(Duration::from_secs(
+                                            DHT_MARKET_RECORD_TTL_SECS,
+                                        )),
+                                    });
+                                    debug!(auction = %award.auction_id, "award published to DHT");
+                                }
+                                Err(e) => warn!(error = %e, "award encode failed"),
+                            }
+                        }
+                    }
+                    _ = publish_tick.tick() => {
+                        let open = engine.open_auctions();
+                        if open.is_empty() {
+                            continue;
+                        }
+                        // Host REST address for remote bidders: explicit
+                        // override, else detected IP + listen port. Deferred
+                        // until both are known.
+                        let host_api_addr = if let Some(addr) = advertise_override.clone() {
+                            if addr.starts_with("http://") || addr.starts_with("https://") {
+                                Some(addr)
+                            } else {
+                                Some(format!("http://{addr}"))
+                            }
+                        } else {
+                            let ip = state_ip.read().await.ip_address.clone();
+                            match (ip, listen_port) {
+                                (Some(ip), Some(port)) => Some(format!("http://{ip}:{port}")),
+                                _ => None,
+                            }
+                        };
+                        let Some(host_api_addr) = host_api_addr else {
+                            debug!(
+                                "auction DHT publish deferred: public address unknown \
+                                 (set API_ADVERTISE_ADDR to publish from behind NAT)"
+                            );
+                            continue;
+                        };
+                        // Index of our open auction ids (capped, deduped).
+                        let mut ids: Vec<String> = Vec::new();
+                        for a in &open {
+                            if ids.len() >= MAX_AUCTION_INDEX_IDS {
+                                break;
+                            }
+                            if !ids.contains(&a.id) {
+                                ids.push(a.id.clone());
+                            }
+                        }
+                        if let Ok(value) = encode_auction_index(&ids) {
+                            let _ = cmd.send(DiscoveryCommand::PutRecord {
+                                key: host_index_key(&self_peer),
+                                value,
+                                ttl: Some(Duration::from_secs(DHT_MARKET_RECORD_TTL_SECS)),
+                            });
+                        }
+                        // Announce ourselves as a host per distinct region —
+                        // providers discover hosts through this key.
+                        let mut regions: std::collections::BTreeSet<&str> = Default::default();
+                        for a in &open {
+                            regions.insert(a.region.as_str());
+                        }
+                        for region in regions {
+                            let _ = cmd.send(DiscoveryCommand::StartProviding {
+                                key: region_providers_key(region),
+                            });
+                        }
+                        // The indexed auction records themselves.
+                        for id in &ids {
+                            let Some(a) = open.iter().find(|a| &a.id == id) else {
+                                continue;
+                            };
+                            let rec = AuctionRecord::from_auction(a, host_api_addr.clone());
+                            match rec.to_bytes() {
+                                Ok(value) => {
+                                    let _ = cmd.send(DiscoveryCommand::PutRecord {
+                                        key: auction_key(id),
+                                        value,
+                                        ttl: Some(Duration::from_secs(
+                                            DHT_MARKET_RECORD_TTL_SECS,
+                                        )),
+                                    });
+                                }
+                                Err(e) => {
+                                    warn!(auction = %id, error = %e, "auction record encode failed")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Step 9.5: Marketplace auto-bid (provider mode, `BID_AUTO=true`).
+    // Polls open auctions and submits a sealed bid at this provider's ask
+    // price whenever it fits the auction's budget cap and capacity floor —
+    // this is what turns isolated nodes into a live bidding market.
+    let bid_auto = std::env::var("BID_AUTO")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    if config.node_mode == "provider" && bid_auto {
+        let ask_raw = env_f64("BID_PRICE_USD_PER_GB", config.settlement_rate_usd_per_gb);
+        let ask_price = if ask_raw.is_finite() {
+            ask_raw.clamp(MIN_PRICE_USD_PER_GB, MAX_PRICE_USD_PER_GB)
+        } else {
+            config.settlement_rate_usd_per_gb
+        };
+        let poll_secs = env_u64("BID_POLL_SECS", 3).max(1);
+        let engine = bid_engine.clone();
+        let bid_backend = backend.clone();
+        let bid_peer_id = identity.peer_id_str().to_string();
+        // G6: signed remote bidding on foreign auctions discovered over
+        // the DHT (same budget/capacity gates as local bids).
+        let disc_cmd = discovery_cmd.clone();
+        let book = auction_book.clone();
+        let bid_region = config.region.clone();
+        let remote_pk = echo_daemon::base64_encode(&identity.public_key_bytes);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(
+            identity
+                .keypair_bytes
+                .as_slice()
+                .try_into()
+                .expect("identity keypair is 32 bytes"),
+        );
+        let http = reqwest::Client::new();
+        let mut bid_track: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        info!(ask_price, poll_secs, "marketplace auto-bid enabled");
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(poll_secs));
+            loop {
+                tick.tick().await;
+                let now = now_epoch_secs();
+                // Snapshot this provider's reputation + capability once per
+                // tick; both feed bid quality and the capacity floor check.
+                let (reputation, latency_ms, capability) = {
+                    let rep = bid_backend
+                        .get_peer_reputation(&bid_peer_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|r| r.reputation_score)
+                        .unwrap_or(0.0);
+                    let cap = bid_backend
+                        .get_capability_for_peer(&bid_peer_id)
+                        .await
+                        .ok()
+                        .flatten();
+                    let lat = cap.as_ref().map(|c| c.avg_latency_ms).unwrap_or(0.0);
+                    (rep, lat, cap)
+                };
+                for auction in engine.open_auctions() {
+                    // Never bid on our own auction; skip ones we cannot
+                    // afford or serve.
+                    if auction.requester_peer_id == bid_peer_id {
+                        continue;
+                    }
+                    if ask_price > auction.max_price_usd_per_gb {
+                        continue;
+                    }
+                    if let Some(cap) = &capability {
+                        if cap.upload_cap_mbps < auction.min_upload_mbps
+                            || cap.download_cap_mbps < auction.min_download_mbps
+                        {
+                            continue;
+                        }
+                    }
+                    let price = ask_price.min(auction.max_price_usd_per_gb);
+                    match engine.submit_bid(
+                        &auction.id,
+                        &bid_peer_id,
+                        price,
+                        reputation,
+                        latency_ms,
+                        now,
+                    ) {
+                        Ok(bid) => {
+                            info!(auction = %auction.id, price = bid.price_usd_per_gb, "auto-bid submitted");
+                        }
+                        Err(BidError::DuplicateBid) => {} // already in — normal
+                        Err(e) => debug!(auction = %auction.id, error = %e, "auto-bid skipped"),
+                    }
+                }
+                // G6: trigger the region host lookup (the event handler
+                // chains index + auction-record fetches) and bid on every
+                // foreign auction already in the book, signed so the host
+                // can verify our identity without an auth token.
+                let _ = disc_cmd.send(DiscoveryCommand::GetProviders {
+                    key: region_providers_key(&bid_region),
+                });
+                for rec in book.open(now) {
+                    if rec.requester_peer_id == bid_peer_id
+                        || rec.is_expired(now)
+                        || bid_track.contains_key(&rec.id)
+                    {
+                        continue;
+                    }
+                    if ask_price > rec.max_price_usd_per_gb {
+                        continue;
+                    }
+                    if let Some(cap) = &capability {
+                        if cap.upload_cap_mbps < rec.min_upload_mbps
+                            || cap.download_cap_mbps < rec.min_download_mbps
+                        {
+                            continue;
+                        }
+                    }
+                    let price = ask_price.min(rec.max_price_usd_per_gb);
+                    let body = SubmitBid {
+                        price_usd_per_gb: price,
+                        provider_peer_id: Some(bid_peer_id.clone()),
+                        public_key: Some(remote_pk.clone()),
+                        signature: Some(sign_bid(&signing_key, &rec.id, price)),
+                    };
+                    let url = format!(
+                        "{}/auctions/{}/bid",
+                        rec.host_api_addr.trim_end_matches('/'),
+                        rec.id
+                    );
+                    match http
+                        .post(&url)
+                        .json(&body)
+                        .timeout(Duration::from_secs(REMOTE_BID_TIMEOUT_SECS))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) if resp.status().is_success() => {
+                            info!(
+                                auction = %rec.id,
+                                host = %rec.host_api_addr,
+                                price,
+                                "remote auto-bid accepted"
+                            );
+                            if bid_track.len() >= MAX_BID_TRACK {
+                                bid_track.clear();
+                            }
+                            bid_track.insert(rec.id.clone(), now);
+                        }
+                        Ok(resp) => debug!(
+                            auction = %rec.id,
+                            status = %resp.status(),
+                            "remote auto-bid rejected"
+                        ),
+                        Err(e) => debug!(auction = %rec.id, error = %e, "remote auto-bid failed"),
+                    }
+                }
+                // Age out dedupe entries as their auctions expire.
+                bid_track.retain(|_, t| now.saturating_sub(*t) <= MAX_AUCTION_WINDOW_SECS);
+            }
+        });
+    }
 
     // Step 10: Set up HTTP API
     // CORS: restrict in production via CORS_ORIGINS env var (comma-separated).
@@ -1821,6 +2505,16 @@ async fn main() -> Result<()> {
         .route("/status", get(handle_status))
         .route("/health", get(handle_health))
         .route("/match", post(handle_match_providers))
+        // Marketplace bidding (price discovery): open auctions, bid,
+        // close/cancel, and the award log. Public like /match — the
+        // control plane stays open unless API_KEY(S) are set.
+        .route("/bid", post(handle_create_auction))
+        .route("/auctions", get(handle_list_auctions))
+        .route("/auctions/:id", get(handle_get_auction))
+        .route("/auctions/:id/bid", post(handle_submit_bid))
+        .route("/auctions/:id/close", post(handle_close_auction))
+        .route("/auctions/:id/cancel", post(handle_cancel_auction))
+        .route("/awards", get(handle_list_awards))
         .merge(control_routes)
         .layer(cors)
         .layer(body_limit)
@@ -1834,6 +2528,7 @@ async fn main() -> Result<()> {
             local_peer_id: identity.peer_id_str().to_string(),
             blocked_peers,
             match_max_stale_secs: env_u64("MATCH_MAX_STALE_SECS", 300),
+            bid_engine,
         });
 
     let addr: SocketAddr = config.listen_addr.parse()?;

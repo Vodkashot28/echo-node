@@ -112,6 +112,56 @@ Daemon-only: `peer_reputation`, `state_receipts`, `settlements`,
 `capability_descriptors`, availability engine, consumer/provider modes,
 live tunnel sessions.
 
+### G6 — Auctions are node-local (no cross-node propagation) — ✅ Implemented (2026-10-16)
+The marketplace bidding engine originally kept all auction state in-memory on
+the node that hosted the auction (the node that received `POST /bid`): a
+provider could only auto-bids against auctions it polled directly, and a
+locked award price never reached the winning provider across hosts.
+
+**Implemented via the existing Kademlia DHT** (`discovery.rs` now has a
+command channel + result events; `main.rs` runs a `market_dht_sync` task):
+
+- **Auction propagation** — the auction host publishes `auction/{id}`
+  (AuctionRecord JSON, host_api URL included) and maintains
+  `auctions_by_host/{host}` id-index records every 10s; providers announce
+  interest via `start_providing("auctions/{region}")`. Remote pollers
+  discover via `GetProviders` → per-host index `GetRecord` → per-auction
+  `GetRecord`. Providers only bid on exact `NODE_REGION` matches.
+- **Remote bids over HTTP** — Kademlia can't collect bid sets, so remote
+  providers submit sealed bids via plain HTTP `POST /auctions/{id}/bid`
+  against the record's `host_api`, with an ed25519-signed payload
+  (`bid:{auction_id}:{price.to_bits()}`); the host verifies the signature →
+  PeerId and attributes reputation/latency correctly. Unsigned legacy bids
+  still work (local attribution).
+- **Award propagation** — at close the host publishes
+  `award/{consumer}/{winner}`; every node watches award records where
+  `provider == local_peer_id` and imports them into the local BidEngine so
+  **subsequent** receipts from that counterparty settle at the locked
+  market price. Already-settled receipts are never repriced (settlement
+  inserts are idempotent).
+- Forced `kad::Mode::Server` on the swarm: libp2p's default auto-mode only
+  serves inbound Kademlia streams once a *confirmed external address*
+  exists — without this, NAT'd/local-only nodes silently reject every
+  inbound record. Covered by a two-swarm e2e test
+  (`tests/dht_market_e2e.rs`).
+
+**Known limits (by design for this slice):**
+- The auction host's `host_api` must be reachable by remote bidders — no
+  NAT traversal for the bid path (DHT propagates discovery; HTTP carries bids).
+- Award records are self-attested (signed by the host but not by the
+  winner); accepted only when `provider == local_peer_id`, bounds-checked,
+  and deduped — trust boundary is "only affects my own earnings accounting".
+- Only receipts settling **after** award import reprice (≤ ~120s window
+  for in-flight sessions; the award-lookup cooldown is 120s).
+- Provider polling filters on exact region match; cross-region bidding is
+  not routed yet.
+- Foreign auctions are only discovered/bid by the auto-bid task
+  (`BID_AUTO=true`); a node without it still hosts its own auctions fine.
+- Auction records expire in the DHT (45s TTL, republished every 10s); a
+  host that dies mid-auction leaves stale records that remote bidders
+  discover only to get HTTP timeouts — acceptable for seconds-long windows.
+
+
 ---
 
 ## Slice 1 — Real telemetry ingestion (implemented)

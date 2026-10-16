@@ -19,13 +19,19 @@
 //! a short-held `std::sync::Mutex` (never across `.await` points).
 
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use tracing::{error, info};
 
 /// Cap on recorded events (oldest dropped first).
 const MAX_RECORDED_EVENTS: usize = 64;
+
+/// Cap on tracked peer ids for per-peer violation attribution (soft-slashing
+/// input). At the cap, already-tracked peers keep counting; new peer ids are
+/// ignored until entries clear (restarted process) — a bound beats an
+/// unbounded map fed by attacker-chosen ids.
+const MAX_TRACKED_PEERS: usize = 4096;
 
 /// One recorded security anomaly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -61,6 +67,19 @@ pub struct SecurityCounters {
     alert_fired: AtomicBool,
     /// True while a burst is active (mirrors `alert_fired`, cheap load).
     alert_active: AtomicBool,
+    /// Per-peer violation counts for soft-slashing (`accountability.rs`):
+    /// incremented only from **post-authentication** attribution sites so an
+    /// attacker can't frame another peer by claiming its id pre-handshake.
+    peer_violations: Mutex<HashMap<String, u64>>,
+}
+
+/// One peer's attributed violation count (`GET /security` payload).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeerViolation {
+    /// Authenticated libp2p peer id the violations were attributed to.
+    pub peer_id: String,
+    /// Cumulative count for this process lifetime.
+    pub violations: u64,
 }
 
 /// Point-in-time view of the counters (serialized into `/status`).
@@ -113,6 +132,7 @@ impl SecurityCounters {
             alert_window_secs: window_secs.max(1),
             alert_fired: AtomicBool::new(false),
             alert_active: AtomicBool::new(false),
+            peer_violations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -282,6 +302,63 @@ impl SecurityCounters {
     pub fn alert_active(&self) -> bool {
         self.alert_active.load(Ordering::Relaxed)
     }
+
+    /// Attribute one security violation to an **authenticated** peer
+    /// (soft-slashing input). Call only where the remote peer id has been
+    /// proven *and* the rule broken is the peer's own doing — post-Noise
+    /// judgment-based policy denials (blacklist / reputation /
+    /// accountability). Never from pre-handshake sites (the peer id is
+    /// attacker-claimable ⇒ slander vector) and never for the dialed peer on
+    /// a MITM mismatch (that id is the spoofed *victim*, not the attacker).
+    ///
+    /// Bounded by [`MAX_TRACKED_PEERS`]: at capacity, unknown peer ids are
+    /// dropped (existing entries keep counting).
+    pub fn note_peer_violation(&self, peer_id: &str) {
+        if peer_id.is_empty() {
+            return;
+        }
+        let Ok(mut map) = self.peer_violations.lock() else {
+            return;
+        };
+        // Two-step (NLL can't hold `get_mut`'s borrow across `map.len()`).
+        if map.contains_key(peer_id) {
+            if let Some(count) = map.get_mut(peer_id) {
+                *count += 1;
+            }
+        } else if map.len() < MAX_TRACKED_PEERS {
+            map.insert(peer_id.to_string(), 1);
+        }
+        // At capacity with an unknown id: dropped rather than growing the map.
+    }
+
+    /// Violations attributed to `peer_id` in this process lifetime (`0` if
+    /// clean or unknown).
+    pub fn peer_violation_count(&self, peer_id: &str) -> u64 {
+        self.peer_violations
+            .lock()
+            .ok()
+            .and_then(|map| map.get(peer_id).copied())
+            .unwrap_or(0)
+    }
+
+    /// The `limit` dirtiest peers by attributed violations, highest first
+    /// (ties broken by peer id for stable output). For `GET /security`.
+    pub fn top_peer_violations(&self, limit: usize) -> Vec<PeerViolation> {
+        let Ok(map) = self.peer_violations.lock() else {
+            return Vec::new();
+        };
+        let mut peers: Vec<(&String, u64)> =
+            map.iter().map(|(peer, count)| (peer, *count)).collect();
+        peers.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        peers
+            .into_iter()
+            .take(limit)
+            .map(|(peer_id, violations)| PeerViolation {
+                peer_id: peer_id.clone(),
+                violations,
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -385,5 +462,62 @@ mod tests {
         assert!(s.alert_active(), "env-configured threshold (4) fires");
         std::env::remove_var("SECURITY_ALERT_THRESHOLD");
         std::env::remove_var("SECURITY_ALERT_WINDOW_SECS");
+    }
+
+    #[test]
+    fn peer_violations_track_and_count() {
+        let s = SecurityCounters::default();
+        assert_eq!(s.peer_violation_count("peer-a"), 0, "clean peer starts at 0");
+        s.note_peer_violation("peer-a");
+        s.note_peer_violation("peer-a");
+        s.note_peer_violation("peer-b");
+        s.note_peer_violation(""); // empty id ignored
+        assert_eq!(s.peer_violation_count("peer-a"), 2);
+        assert_eq!(s.peer_violation_count("peer-b"), 1);
+        assert_eq!(s.peer_violation_count("peer-c"), 0);
+        // Attribution is orthogonal to the global counters (no double-count).
+        assert_eq!(s.snapshot().policy_rejections, 0);
+    }
+
+    #[test]
+    fn top_peer_violations_sorts_desc() {
+        let s = SecurityCounters::default();
+        for _ in 0..3 {
+            s.note_peer_violation("mid");
+        }
+        for _ in 0..5 {
+            s.note_peer_violation("worst");
+        }
+        s.note_peer_violation("clean-once");
+        let top = s.top_peer_violations(2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].peer_id, "worst");
+        assert_eq!(top[0].violations, 5);
+        assert_eq!(top[1].peer_id, "mid");
+        assert_eq!(top[1].violations, 3);
+        // Full list keeps stable tie ordering (peer id asc at equal counts).
+        let all = s.top_peer_violations(10);
+        assert_eq!(
+            all.iter().map(|p| p.peer_id.as_str()).collect::<Vec<_>>(),
+            vec!["worst", "mid", "clean-once"]
+        );
+    }
+
+    #[test]
+    fn peer_violation_map_respects_capacity() {
+        let s = SecurityCounters::default();
+        for i in 0..MAX_TRACKED_PEERS {
+            s.note_peer_violation(&format!("peer-{i}"));
+        }
+        // At capacity: tracked peers keep counting, unknown ids are dropped.
+        s.note_peer_violation("peer-0");
+        s.note_peer_violation("peer-new");
+        assert_eq!(s.peer_violation_count("peer-0"), 2, "existing entry keeps counting");
+        assert_eq!(s.peer_violation_count("peer-new"), 0, "unknown id dropped at cap");
+        assert_eq!(
+            s.top_peer_violations(usize::MAX).len(),
+            MAX_TRACKED_PEERS,
+            "map never exceeds its bound"
+        );
     }
 }

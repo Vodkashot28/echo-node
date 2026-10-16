@@ -32,15 +32,26 @@ impl SettlementEngine {
         }
     }
 
-    /// Verify a signed receipt and record it as a settlement entry.
-    ///
-    /// Returns `Ok(None)` when the receipt does not count toward settlement:
-    /// - it was not signed by this node (we only settle our own obligations),
-    /// - the signature is invalid (tampered / malformed),
-    /// - it was already settled (idempotent, receipt_id PK).
-    ///
-    /// Returns `Ok(Some(record))` after persisting a new settlement entry.
+    /// Verify a signed receipt and record it as a settlement entry at the
+    /// engine's default flat rate (`SETTLEMENT_RATE_USD_PER_GB`).
     pub async fn settle_receipt(&self, receipt: StateReceipt) -> Result<Option<SettlementRecord>> {
+        self.settle_receipt_at_price(receipt, None).await
+    }
+
+    /// Verify a signed receipt and record it as a settlement entry,
+    /// optionally overriding the USD/GB rate with a market-discovered
+    /// price (the locked price from a [`crate::bidding`] award). An
+    /// override that is non-finite or non-positive falls back to the
+    /// default rate.
+    pub async fn settle_receipt_at_price(
+        &self,
+        receipt: StateReceipt,
+        price_usd_per_gb: Option<f64>,
+    ) -> Result<Option<SettlementRecord>> {
+        let usd_per_gb = match price_usd_per_gb {
+            Some(p) if p.is_finite() && p > 0.0 => p,
+            _ => self.usd_per_gb,
+        };
         if receipt.signer_peer_id != self.identity.peer_id_str() {
             debug!(
                 receipt = %receipt.receipt_id,
@@ -76,7 +87,7 @@ impl SettlementEngine {
             signer_peer_id: receipt.signer_peer_id.clone(),
             counterparty_peer_id: receipt.counterparty_peer_id.clone(),
             bytes_settled: receipt.bytes_transferred,
-            earnings_usd: self.earnings_for_bytes(receipt.bytes_transferred),
+            earnings_usd: earnings_at_rate(receipt.bytes_transferred, usd_per_gb),
             settled_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -102,9 +113,16 @@ impl SettlementEngine {
         Ok(Some(record))
     }
 
-    /// Compute the USD payout value for a byte count.
+    /// Compute the USD payout value for a byte count at the engine's
+    /// default flat rate.
     pub fn earnings_for_bytes(&self, bytes: u64) -> f64 {
-        (bytes as f64 / 1_000_000_000.0) * self.usd_per_gb
+        earnings_at_rate(bytes, self.usd_per_gb)
+    }
+
+    /// The engine's default flat rate (USD/GB), used when no market price
+    /// is attached to a receipt.
+    pub fn default_rate_usd_per_gb(&self) -> f64 {
+        self.usd_per_gb
     }
 
     /// List the most recently settled receipts.
@@ -115,5 +133,23 @@ impl SettlementEngine {
     /// Aggregate payout totals across all settled receipts.
     pub async fn summary(&self) -> Result<crate::models::SettlementSummary> {
         self.backend.settlement_summary().await
+    }
+}
+
+/// USD payout for a byte count at an arbitrary rate (flat default or a
+/// market-discovered award price).
+fn earnings_at_rate(bytes: u64, usd_per_gb: f64) -> f64 {
+    (bytes as f64 / 1_000_000_000.0) * usd_per_gb
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn earnings_at_rate_scales_bytes() {
+        assert_eq!(earnings_at_rate(1_000_000_000, 0.50), 0.50);
+        assert_eq!(earnings_at_rate(2_000_000_000, 0.25), 0.50);
+        assert_eq!(earnings_at_rate(0, 10.0), 0.0);
     }
 }

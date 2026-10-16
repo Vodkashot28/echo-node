@@ -7,7 +7,7 @@ use libp2p::{
     swarm::{NetworkBehaviour, StreamProtocol, Swarm, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, SwarmBuilder,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -117,13 +117,47 @@ pub fn parse_bootstrap_peer(entry: &str) -> Result<(PeerId, Multiaddr)> {
 pub struct DiscoveryService {
     swarm: Swarm<Behaviour>,
     event_tx: mpsc::UnboundedSender<DiscoveryEvent>,
+    cmd_rx: mpsc::UnboundedReceiver<DiscoveryCommand>,
 }
 
+/// Commands other tasks issue to the discovery swarm (the swarm is owned by
+/// the `run` loop, so all Kademlia operations go through this channel).
 #[derive(Debug)]
+pub enum DiscoveryCommand {
+    /// Store a value record under `key`, replicated to the closest peers.
+    /// `ttl` bounds the record's lifetime (None = configured default).
+    PutRecord {
+        key: String,
+        value: Vec<u8>,
+        ttl: Option<Duration>,
+    },
+    /// Fetch a value record by exact key (Kademlia has no prefix queries).
+    GetRecord { key: String },
+    /// Announce that this node holds data under `key` (auction-host
+    /// rendezvous: `get_providers` later returns every announcing node).
+    StartProviding { key: String },
+    /// Look up all current providers of `key`.
+    GetProviders { key: String },
+}
+
+#[derive(Debug, Clone)]
 pub enum DiscoveryEvent {
     PeerFound(PeerId, Multiaddr),
     PeerDisconnected(PeerId),
-    CapabilityPublished,
+    /// A value record was stored locally (and replication query started).
+    RecordPublished { key: String },
+    /// A value record was found — local or remote, exact key match.
+    RecordFound { key: String, value: Vec<u8> },
+    /// No record exists for this key (or the lookup failed/timed out).
+    RecordNotFound { key: String },
+    /// Provider lookup result for `key` (may fire more than once per query;
+    /// later batches are supersets as the lookup progresses).
+    ProvidersFound { key: String, providers: Vec<PeerId> },
+}
+
+/// String form of a Kademlia record key (keys are plain UTF-8 byte strings).
+fn key_string(key: &kad::RecordKey) -> String {
+    String::from_utf8_lossy(key.as_ref()).into_owned()
 }
 
 #[derive(NetworkBehaviour)]
@@ -136,7 +170,11 @@ impl DiscoveryService {
     pub async fn new(
         identity: &NodeIdentity,
         config: &DiscoveryConfig,
-    ) -> Result<(Self, mpsc::UnboundedReceiver<DiscoveryEvent>)> {
+    ) -> Result<(
+        Self,
+        mpsc::UnboundedSender<DiscoveryCommand>,
+        mpsc::UnboundedReceiver<DiscoveryEvent>,
+    )> {
         let keypair = identity.libp2p_keypair()?;
 
         // Namespace every protocol by network id so isolated deployments
@@ -164,8 +202,13 @@ impl DiscoveryService {
                 ));
 
                 let store = kad::store::MemoryStore::new(peer_id);
-                let kademlia =
+                let mut kademlia =
                     kad::Behaviour::with_config(peer_id, store, kad::Config::new(kad_protocol));
+                // Force server mode: by default Kademlia stays in client mode (no
+                // inbound substreams served) until a confirmed *external* address
+                // exists, which NAT'd/local-only nodes never get — record storage
+                // and provider announcements would silently fail on every peer.
+                kademlia.set_mode(Some(kad::Mode::Server));
 
                 Ok(Behaviour {
                     identify,
@@ -253,20 +296,32 @@ impl DiscoveryService {
         }
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
         Ok((
             Self {
                 swarm,
                 event_tx,
+                cmd_rx,
             },
+            cmd_tx,
             event_rx,
         ))
     }
 
-    /// Run the discovery event loop
+    /// Run the discovery event loop: swarm events + external commands.
     pub async fn run(&mut self) {
+        // Once every command sender is dropped the cmd branch goes quiet
+        // instead of spinning; the swarm keeps running either way.
+        let mut cmds_closed = false;
         loop {
             tokio::select! {
+                cmd = self.cmd_rx.recv(), if !cmds_closed => {
+                    match cmd {
+                        Some(cmd) => self.handle_command(cmd),
+                        None => cmds_closed = true,
+                    }
+                }
                 event = self.swarm.next() => {
                     let Some(event) = event else { break };
                     match event {
@@ -287,9 +342,9 @@ impl DiscoveryService {
                         )) => {
                             match result {
                                 kad::QueryResult::GetProviders(Ok(
-                                    kad::GetProvidersOk::FoundProviders { providers, .. },
+                                    kad::GetProvidersOk::FoundProviders { key, providers },
                                 )) => {
-                                    debug!(providers_count = providers.len(), "providers found");
+                                    debug!(key = %key_string(&key), providers_count = providers.len(), "providers found");
                                     // The swarm's peer store (populated via identify protocol)
                                     // will resolve addresses when a connection is initiated.
                                     // Pass Multiaddr::empty here; the event handler in main.rs
@@ -300,18 +355,63 @@ impl DiscoveryService {
                                             Multiaddr::empty(),
                                         ));
                                     }
+                                    let _ = self.event_tx.send(DiscoveryEvent::ProvidersFound {
+                                        key: key_string(&key),
+                                        providers: providers.into_iter().collect(),
+                                    });
                                 }
+                                kad::QueryResult::GetProviders(Ok(
+                                    kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. },
+                                )) => {}
                                 kad::QueryResult::GetProviders(Err(e)) => {
                                     warn!(error = %e, "get providers failed");
                                 }
-                                kad::QueryResult::PutRecord(Ok(_)) => {
-                                    info!("record published to DHT");
-                                    let _ = self.event_tx.send(DiscoveryEvent::CapabilityPublished);
+                                kad::QueryResult::PutRecord(Ok(kad::PutRecordOk { key })) => {
+                                    let key = key_string(&key);
+                                    debug!(key = %key, "record published to DHT");
+                                    let _ = self.event_tx.send(DiscoveryEvent::RecordPublished { key });
                                 }
                                 kad::QueryResult::PutRecord(Err(e)) => {
                                     error!(error = %e, "put record failed");
                                 }
-                                _ => {}
+                                kad::QueryResult::GetRecord(Ok(
+                                    kad::GetRecordOk::FoundRecord(peer_record),
+                                )) => {
+                                    let _ = self.event_tx.send(DiscoveryEvent::RecordFound {
+                                        key: key_string(&peer_record.record.key),
+                                        value: peer_record.record.value,
+                                    });
+                                }
+                                kad::QueryResult::GetRecord(Ok(
+                                    kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. },
+                                )) => {}
+                                kad::QueryResult::GetRecord(Err(kad::GetRecordError::QuorumFailed {
+                                    records, ..
+                                })) => {
+                                    // A short quorum can still carry usable records.
+                                    for peer_record in records {
+                                        let _ = self.event_tx.send(DiscoveryEvent::RecordFound {
+                                            key: key_string(&peer_record.record.key),
+                                            value: peer_record.record.value,
+                                        });
+                                    }
+                                }
+                                kad::QueryResult::GetRecord(Err(e)) => {
+                                    debug!(error = %e, key = %key_string(e.key()), "record lookup failed");
+                                    let _ = self.event_tx.send(DiscoveryEvent::RecordNotFound {
+                                        key: key_string(e.key()),
+                                    });
+                                }
+                                kad::QueryResult::StartProviding(Ok(_)) => {
+                                    debug!("provider record announced");
+                                }
+                                kad::QueryResult::StartProviding(Err(e)) => {
+                                    warn!(error = %e, "start providing failed");
+                                }
+                                kad::QueryResult::Bootstrap(_)
+                                | kad::QueryResult::RepublishProvider(_)
+                                | kad::QueryResult::RepublishRecord(_)
+                                | kad::QueryResult::GetClosestPeers(_) => {}
                             }
                         }
                         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -324,6 +424,34 @@ impl DiscoveryService {
                         _ => {}
                     }
                 }
+            }
+        }
+    }
+
+    /// Execute a command against the Kademlia behaviour. Results arrive
+    /// asynchronously as swarm events (handled in [`Self::run`]).
+    fn handle_command(&mut self, cmd: DiscoveryCommand) {
+        let kademlia = &mut self.swarm.behaviour_mut().kademlia;
+        match cmd {
+            DiscoveryCommand::PutRecord { key, value, ttl } => {
+                let mut record = kad::Record::new(kad::RecordKey::new(&key), value);
+                if let Some(ttl) = ttl {
+                    record.expires = Some(Instant::now() + ttl);
+                }
+                if let Err(e) = kademlia.put_record(record, kad::Quorum::One) {
+                    warn!(error = %e, "put record rejected");
+                }
+            }
+            DiscoveryCommand::GetRecord { key } => {
+                kademlia.get_record(kad::RecordKey::new(&key));
+            }
+            DiscoveryCommand::StartProviding { key } => {
+                if let Err(e) = kademlia.start_providing(kad::RecordKey::new(&key)) {
+                    warn!(error = %e, key, "start providing rejected");
+                }
+            }
+            DiscoveryCommand::GetProviders { key } => {
+                kademlia.get_providers(kad::RecordKey::new(&key));
             }
         }
     }

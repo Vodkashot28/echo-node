@@ -6,6 +6,10 @@
 //! - **blacklisted peers** — hard deny (`POLICY_BLOCKED_PEERS`)
 //! - **min reputation** — from `peer_reputation`; unknown peers score 0.0
 //!   (`POLICY_MIN_REPUTATION`, `0` disables)
+//! - **min accountability (soft-slashing)** — composite of decayed
+//!   reputation × per-peer security violations × recorded session
+//!   availability (see [`crate::accountability`]); unknown peers score 0.0
+//!   (`POLICY_MIN_ACCOUNTABILITY`, `0` disables)
 //! - **max latency** — peer's recorded `avg_latency_ms` (`POLICY_MAX_LATENCY_MS`,
 //!   unset disables; unrecorded/zero samples are not enforced)
 //! - **per-peer session quota** (`POLICY_MAX_SESSIONS_PER_PEER`, `0` = unlimited)
@@ -24,6 +28,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::warn;
 
+use crate::accountability::soft_slash_score;
+
 /// Static policy configuration, parsed once from the environment.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PolicyConfig {
@@ -41,6 +47,10 @@ pub struct PolicyConfig {
     /// min-reputation gate: `score * 0.5^(idle/half_life)`. `0` disables
     /// decay (raw stored score is gated). Default `30`.
     pub reputation_half_life_days: f64,
+    /// Minimum soft-slashing score required for admission (composite of
+    /// decayed reputation × security-violation discount × availability
+    /// history — see [`crate::accountability`]). `0.0` disables.
+    pub min_accountability: f64,
 }
 
 impl PolicyConfig {
@@ -96,12 +106,14 @@ impl PolicyConfig {
                 })
                 .unwrap_or_default(),
             reputation_half_life_days,
+            min_accountability: env_f64_clamped("POLICY_MIN_ACCOUNTABILITY", 0.0),
         }
     }
 
     /// True when every gate is off — admission always allows.
     pub fn is_open(&self) -> bool {
         self.min_reputation <= 0.0
+            && self.min_accountability <= 0.0
             && self.max_latency_ms.is_none()
             && self.max_sessions_per_peer == 0
             && self.max_sessions_per_region == 0
@@ -115,6 +127,7 @@ impl PolicyConfig {
 pub enum PolicyViolation {
     BlockedPeer,
     LowReputation { score: f64, min: f64 },
+    LowAccountability { score: f64, min: f64 },
     HighLatency { latency_ms: f64, max_ms: f64 },
     PeerQuotaExceeded { peer: String, in_use: u32, max: u32 },
     RegionCapExceeded { region: String, in_use: u32, max: u32 },
@@ -126,6 +139,12 @@ impl std::fmt::Display for PolicyViolation {
             Self::BlockedPeer => write!(f, "peer is blacklisted"),
             Self::LowReputation { score, min } => {
                 write!(f, "reputation {score:.2} below minimum {min:.2}")
+            }
+            Self::LowAccountability { score, min } => {
+                write!(
+                    f,
+                    "soft-slashing score {score:.2} below minimum {min:.2}"
+                )
             }
             Self::HighLatency { latency_ms, max_ms } => {
                 write!(f, "recorded latency {latency_ms:.1}ms above maximum {max_ms:.1}ms")
@@ -187,6 +206,13 @@ pub struct PeerFacts {
     /// Seconds since the peer was last active (`last_active_at`); `None` =
     /// unknown recency (reputation treated as fresh for decay purposes).
     pub idle_secs: Option<u64>,
+    /// Security violations attributed to this peer (soft-slashing input;
+    /// `0` = clean / process-fresh).
+    pub violations: u64,
+    /// Provider-recorded successful sessions with this peer.
+    pub successful_sessions: u64,
+    /// Provider-recorded failed sessions with this peer.
+    pub failed_sessions: u64,
 }
 
 /// Time-decay a reputation score: `score * 0.5^(idle / half_life)`.
@@ -248,6 +274,26 @@ impl PolicyEngine {
                 return Err(PolicyViolation::LowReputation {
                     score,
                     min: cfg.min_reputation,
+                });
+            }
+        }
+
+        if cfg.min_accountability > 0.0 {
+            // Soft-slashing gate: composite of trust-decayed reputation,
+            // per-peer security violations, and recorded session outcomes
+            // (see `crate::accountability`). Unknown peers score 0.0.
+            let score = soft_slash_score(
+                facts.reputation_score.unwrap_or(0.0),
+                facts.idle_secs,
+                cfg.reputation_half_life_days,
+                facts.violations,
+                facts.successful_sessions,
+                facts.failed_sessions,
+            );
+            if score < cfg.min_accountability {
+                return Err(PolicyViolation::LowAccountability {
+                    score,
+                    min: cfg.min_accountability,
                 });
             }
         }
@@ -359,11 +405,11 @@ fn env_f64_clamped(key: &str, default: f64) -> f64 {
         Ok(raw) => match raw.parse::<f64>() {
             Ok(v) if v.is_finite() && (0.0..=1.0).contains(&v) => v,
             Ok(v) => {
-                warn!(key, value = %v, "POLICY_MIN_REPUTATION must be in [0,1]; using default");
+                warn!(key, value = %v, "policy min-score knob must be in [0,1]; using default");
                 default
             }
             Err(_) => {
-                warn!(key, value = %raw, "unparseable POLICY_MIN_REPUTATION; using default");
+                warn!(key, value = %raw, "unparseable policy min-score knob; using default");
                 default
             }
         },
@@ -390,6 +436,9 @@ mod tests {
             reputation_score: reputation,
             avg_latency_ms: latency,
             idle_secs: None,
+            violations: 0,
+            successful_sessions: 0,
+            failed_sessions: 0,
         }
     }
 
@@ -398,6 +447,9 @@ mod tests {
             reputation_score: reputation,
             avg_latency_ms: None,
             idle_secs,
+            violations: 0,
+            successful_sessions: 0,
+            failed_sessions: 0,
         }
     }
 
@@ -620,11 +672,13 @@ mod tests {
     fn from_env_parses_policy_and_decay_knobs() {
         // Consolidated env test (tests run in parallel threads).
         std::env::set_var("POLICY_MIN_REPUTATION", "0.25");
+        std::env::set_var("POLICY_MIN_ACCOUNTABILITY", "0.6");
         std::env::set_var("POLICY_MAX_SESSIONS_PER_PEER", "3");
         std::env::set_var("POLICY_BLOCKED_PEERS", "peerX, peerY ,");
         std::env::set_var("REPUTATION_DECAY_HALF_LIFE_DAYS", "14");
         let cfg = PolicyConfig::from_env();
         assert_eq!(cfg.min_reputation, 0.25);
+        assert_eq!(cfg.min_accountability, 0.6);
         assert_eq!(cfg.max_sessions_per_peer, 3);
         assert!(cfg.blocked_peers.contains("peerX"));
         assert!(cfg.blocked_peers.contains("peerY"));
@@ -632,8 +686,69 @@ mod tests {
         assert_eq!(cfg.reputation_half_life_days, 14.0);
         assert!(!cfg.is_open(), "configured gates ⇒ engine active");
         std::env::remove_var("POLICY_MIN_REPUTATION");
+        std::env::remove_var("POLICY_MIN_ACCOUNTABILITY");
         std::env::remove_var("POLICY_MAX_SESSIONS_PER_PEER");
         std::env::remove_var("POLICY_BLOCKED_PEERS");
         std::env::remove_var("REPUTATION_DECAY_HALF_LIFE_DAYS");
+    }
+
+    /// Soft-slashing gate: violations and failed history push the composite
+    /// score below `min_accountability`; a clean peer with history passes.
+    #[test]
+    fn min_accountability_gates_on_composite_score() {
+        let engine = PolicyEngine::new(PolicyConfig {
+            min_accountability: 0.6,
+            ..open_config()
+        });
+
+        // Clean + full reputation + no history ⇒ 1.0 ⇒ allowed.
+        let clean = PeerFacts {
+            reputation_score: Some(1.0),
+            ..facts(None, None)
+        };
+        assert!(engine.admit("good", &clean, "eu").is_ok());
+
+        // 4 attributed violations ⇒ 1.0 × 0.5 × 1.0 = 0.5 < 0.6 ⇒ denied.
+        let viol = PeerFacts {
+            reputation_score: Some(1.0),
+            violations: 4,
+            ..facts(None, None)
+        };
+        let err = engine
+            .admit("abuser", &viol, "eu")
+            .expect_err("violations must discount below the gate");
+        match err {
+            PolicyViolation::LowAccountability { score, min } => {
+                assert!(score < min && min == 0.6, "score {score} vs min {min}");
+            }
+            other => panic!("unexpected violation: {other:?}"),
+        }
+
+        // 100 % failed history ⇒ availability factor 0.5 ⇒ denied.
+        let failed = PeerFacts {
+            reputation_score: Some(1.0),
+            successful_sessions: 0,
+            failed_sessions: 5,
+            ..facts(None, None)
+        };
+        assert_eq!(
+            engine.admit("flaky", &failed, "eu").unwrap_err(),
+            PolicyViolation::LowAccountability { score: 0.5, min: 0.6 }
+        );
+
+        // Same peer with mixed history (5/8 success ⇒ factor ≈ 0.8125) passes.
+        let mixed = PeerFacts {
+            reputation_score: Some(1.0),
+            successful_sessions: 5,
+            failed_sessions: 3,
+            ..facts(None, None)
+        };
+        assert!(engine.admit("mixed", &mixed, "eu").is_ok());
+
+        // Unknown peer (no reputation row) scores 0 ⇒ denied.
+        assert_eq!(
+            engine.admit("stranger", &facts(None, None), "eu").unwrap_err(),
+            PolicyViolation::LowAccountability { score: 0.0, min: 0.6 }
+        );
     }
 }
