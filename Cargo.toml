@@ -35,12 +35,22 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+directories = "5.0"
+indicatif = "0.17"
+toml = "0.8"
+
 # Persistence (required — the daemon cannot run without a storage backend)
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres"] }
 
 # Canonical ledger hashing (sha256 event digests — already in the tree via
 # ed25519-dalek, pinned here because ledger.rs calls it directly)
 sha2 = "0.10"
+
+# Unix-only: daemon detach (setsid) + stop signalling (kill) in the CLI
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [profile.dev]
 opt-level = 1

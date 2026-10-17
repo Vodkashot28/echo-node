@@ -46,6 +46,13 @@ use tokio::{signal, sync::RwLock, time::sleep};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error, info, warn};
 
+use clap::Parser;
+
+/// Node control CLI (start/stop/status/onboard/marketplace/…). The same
+/// binary is also the daemon: with no subcommand — or with `daemon` — the
+/// daemon entry point below runs, exactly as before the CLI existed.
+mod cli;
+
 /// Detect the node's public IP address by querying a public endpoint.
 /// Falls back to `None` on failure (no panics, no blocking the runtime).
 async fn detect_public_ip() -> Option<String> {
@@ -1546,6 +1553,24 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Shared for both entry paths: the daemon needs .env (DATABASE_URL,
+    // API_KEY, …) and CLI commands need the same auth env to reach
+    // /settlements and /control.
+    let _ = dotenvy::dotenv();
+
+    // Parse first: `echo-node --help`/`<subcommand>` must not boot the
+    // daemon (or touch tracing) before we know what was asked.
+    match cli::Cli::parse().command {
+        // No subcommand → daemon (backward compatible with `cargo run` and
+        // every existing deployment), as is the explicit `daemon` form that
+        // `echo-node start` spawns.
+        None | Some(cli::Commands::Daemon) => run_daemon().await,
+        Some(cmd) => cli::run(cmd).await,
+    }
+}
+
+/// Foreground daemon entry point (the pre-CLI `main`, unchanged).
+async fn run_daemon() -> Result<()> {
     let _ = dotenvy::dotenv();
 
     tracing_subscriber::fmt()
