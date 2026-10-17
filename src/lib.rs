@@ -5,6 +5,7 @@ pub mod bidding;
 pub mod consumer;
 pub mod discovery;
 pub mod identity;
+pub mod ledger;
 pub mod meter;
 pub mod migrator;
 pub mod models;
@@ -140,4 +141,13 @@ pub trait MetricsBackend: Send + Sync {
         limit: i64,
     ) -> Result<Vec<CapabilityDescriptor>>;
     async fn get_capability_for_peer(&self, peer_id: &str) -> Result<Option<CapabilityDescriptor>>;
+
+    /// Append one canonical ledger event (strictly append-only — the
+    /// hash chain assumes rows are never updated or deleted).
+    async fn append_ledger_event(&self, row: &LedgerEventRow) -> Result<()>;
+
+    /// Load the per-node hash-chain state (highest sequence + its hash,
+    /// plus the genesis hash) so the ledger writer can resume the chain
+    /// after a restart. `None` when the node has no events yet.
+    async fn load_ledger_chain_state(&self, node_id: &str) -> Result<Option<LedgerChainState>>;
 }

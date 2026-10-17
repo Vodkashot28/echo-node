@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
 /// Cap on recorded events (oldest dropped first).
@@ -42,6 +43,18 @@ pub struct SecurityEvent {
     pub kind: &'static str,
     /// Human context: addr, session id, rule name, receipt id, …
     pub detail: String,
+}
+
+/// Notice sent to the ledger bridge when a burst alert trips. Emitted
+/// once per burst (latched until the window drains).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SecurityAlertNotice {
+    /// Events counted inside the window when the alert fired.
+    pub events_in_window: usize,
+    /// Configured burst threshold.
+    pub threshold: u64,
+    /// Configured window length (seconds).
+    pub window_secs: u64,
 }
 
 /// Shared security counter registry. One instance per daemon, held behind
@@ -71,6 +84,9 @@ pub struct SecurityCounters {
     /// incremented only from **post-authentication** attribution sites so an
     /// attacker can't frame another peer by claiming its id pre-handshake.
     peer_violations: Mutex<HashMap<String, u64>>,
+    /// Optional ledger bridge: receives one [`SecurityAlertNotice`] each
+    /// time a burst alert trips (set once at startup by `main.rs`).
+    alert_sink: Mutex<Option<mpsc::UnboundedSender<SecurityAlertNotice>>>,
 }
 
 /// One peer's attributed violation count (`GET /security` payload).
@@ -133,6 +149,15 @@ impl SecurityCounters {
             alert_fired: AtomicBool::new(false),
             alert_active: AtomicBool::new(false),
             peer_violations: Mutex::new(HashMap::new()),
+            alert_sink: Mutex::new(None),
+        }
+    }
+
+    /// Attach a one-way sink for burst-alert notices (the ledger bridge).
+    /// Replaceable in tests; production sets it once at startup.
+    pub fn set_alert_sink(&self, tx: mpsc::UnboundedSender<SecurityAlertNotice>) {
+        if let Ok(mut slot) = self.alert_sink.lock() {
+            *slot = Some(tx);
         }
     }
 
@@ -222,6 +247,17 @@ impl SecurityCounters {
                 window_secs = self.alert_window_secs,
                 "SECURITY ALERT: burst of security events detected (invalid handshakes / abuse)"
             );
+            // Best-effort ledger notice (never blocks; drop on full).
+            let notice = SecurityAlertNotice {
+                events_in_window: count,
+                threshold: self.alert_threshold,
+                window_secs: self.alert_window_secs,
+            };
+            if let Ok(slot) = self.alert_sink.lock() {
+                if let Some(tx) = slot.as_ref() {
+                    let _ = tx.send(notice);
+                }
+            }
         } else if !should_fire && was_fired {
             self.alert_fired.store(false, Ordering::Relaxed);
             self.alert_active.store(false, Ordering::Relaxed);
@@ -447,6 +483,31 @@ mod tests {
         }
         assert!(!s.alert_active());
         assert!(!s.snapshot().alert_active);
+    }
+
+    #[test]
+    fn alert_notice_is_forwarded_to_sink_once_per_burst() {
+        let s = SecurityCounters::with_alerts(2, 60);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        s.set_alert_sink(tx);
+
+        s.inc_handshake_failure("a");
+        assert!(
+            rx.try_recv().is_err(),
+            "no notice before the threshold is reached"
+        );
+
+        s.inc_handshake_failure("b"); // reaches threshold 2 → fires
+        let notice = rx.try_recv().expect("notice forwarded on fire");
+        assert_eq!(notice.threshold, 2);
+        assert_eq!(notice.events_in_window, 2);
+        assert_eq!(notice.window_secs, 60);
+
+        s.inc_handshake_failure("c"); // still inside the burst
+        assert!(
+            rx.try_recv().is_err(),
+            "latched: exactly one notice per burst"
+        );
     }
 
     #[test]

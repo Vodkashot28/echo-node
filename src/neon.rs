@@ -575,4 +575,58 @@ impl MetricsBackend for NeonStore {
             total_earnings_usd: row.2.unwrap_or(0.0),
         })
     }
+
+    async fn append_ledger_event(&self, row: &LedgerEventRow) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO ledger_events (event_id, sequence, event_type,
+                event_version, schema_version, ts, network, node_id, actor_id,
+                correlation_id, parent_event_id, hash, prev_hash, event_json)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
+        )
+        .bind(&row.event_id)
+        .bind(row.sequence as i64)
+        .bind(&row.event_type)
+        .bind(row.event_version as i32)
+        .bind(row.schema_version as i32)
+        .bind(&row.ts)
+        .bind(&row.network)
+        .bind(&row.node_id)
+        .bind(&row.actor_id)
+        .bind(&row.correlation_id)
+        .bind(&row.parent_event_id)
+        .bind(&row.hash)
+        .bind(&row.prev_hash)
+        .bind(&row.event_json)
+        .execute(&self.pool)
+        .await
+        .context("neon append ledger event")?;
+        Ok(())
+    }
+
+    async fn load_ledger_chain_state(&self, node_id: &str) -> Result<Option<LedgerChainState>> {
+        let last: Option<(i64, String)> = sqlx::query_as(
+            "SELECT sequence, hash FROM ledger_events
+             WHERE node_id = $1 ORDER BY sequence DESC LIMIT 1",
+        )
+        .bind(node_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("neon load ledger last event")?;
+        let Some((last_seq, last_hash)) = last else {
+            return Ok(None);
+        };
+        let genesis: (String,) = sqlx::query_as(
+            "SELECT hash FROM ledger_events
+             WHERE node_id = $1 ORDER BY sequence ASC LIMIT 1",
+        )
+        .bind(node_id)
+        .fetch_one(&self.pool)
+        .await
+        .context("neon load ledger genesis event")?;
+        Ok(Some(LedgerChainState {
+            last_sequence: last_seq as u64,
+            last_hash,
+            genesis_hash: genesis.0,
+        }))
+    }
 }

@@ -198,6 +198,45 @@ pub struct SettlementSummary {
 }
 
 // ──────────────────────────────────────────────────────────────
+// Canonical ledger events (append-only audit log, `ledger_events`)
+// ──────────────────────────────────────────────────────────────
+
+/// Storage row for one canonical ledger event (see `ledger.rs`).
+/// `event_json` holds the full canonical event — the hash chain is
+/// computed over exactly that serialization — while the scalar columns
+/// are extracted for indexing and ad-hoc queries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LedgerEventRow {
+    pub event_id: String,
+    pub sequence: u64,
+    pub event_type: String,
+    pub event_version: u16,
+    pub schema_version: u16,
+    pub ts: String,
+    pub network: String,
+    pub node_id: String,
+    pub actor_id: String,
+    pub correlation_id: Option<String>,
+    pub parent_event_id: Option<String>,
+    pub hash: String,
+    pub prev_hash: Option<String>,
+    pub event_json: String,
+}
+
+/// Per-node hash-chain state, restored on startup so sequences and
+/// `prev_hash` links survive restarts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LedgerChainState {
+    /// Highest sequence number already persisted for this node.
+    pub last_sequence: u64,
+    /// Hash of that newest event — the `prev_hash` of the next append.
+    pub last_hash: String,
+    /// Hash of the first event ever persisted for this node — the
+    /// chain root carried in `provenance.root_hash` of every later event.
+    pub genesis_hash: String,
+}
+
+// ──────────────────────────────────────────────────────────────
 // New: Capability descriptor (published to DHT)
 // ──────────────────────────────────────────────────────────────
 

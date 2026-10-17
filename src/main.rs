@@ -2,13 +2,16 @@ use echo_daemon::auth::{require_scope, ApiKeyRegistry, AuthGate, Scope};
 use echo_daemon::availability::AvailabilityEngine;
 use echo_daemon::bidding::{
     award_key, auction_key, decode_auction_index, encode_auction_index, host_index_key,
-    region_providers_key, sign_bid, verify_signed_bid, Auction, AuctionBook, AuctionRecord, Award,
-    Bid, BidConfig, BidEngine, BidError, CreateAuction, SubmitBid, MAX_AUCTION_INDEX_IDS,
+    region_providers_key, sign_bid, verify_signed_bid, Auction, AuctionBook, AuctionRecord, AuctionStatus,
+    Award, Bid, BidConfig, BidEngine, BidError, CreateAuction, SubmitBid, MAX_AUCTION_INDEX_IDS,
     MAX_AUCTION_WINDOW_SECS, MAX_PRICE_USD_PER_GB, MIN_PRICE_USD_PER_GB,
 };
 use echo_daemon::consumer::run_consumer_listener;
 use echo_daemon::discovery::{DiscoveryCommand, DiscoveryConfig, DiscoveryService};
 use echo_daemon::identity::NodeIdentity;
+use echo_daemon::ledger::{
+    event_type as ledger_event, spawn_ledger_writer, LedgerDraft, LedgerWriter,
+};
 use echo_daemon::meter::MeteringEngine;
 use echo_daemon::neon;
 use echo_daemon::policy::{PolicyConfig, PolicyEngine};
@@ -19,7 +22,7 @@ use echo_daemon::tunnel::TunnelService;
 use echo_daemon::{
     telemetry::{self, DashboardConfig, DashboardReporter, DashboardTelemetry, FeatureInputs},
     MetricsBackend, NetworkMetricsRow, NodeIntelligenceRow, NodeMetricsRow,
-    NodeRow,
+    NodeRow, StateReceipt,
 };
 
 use anyhow::{Context, Result};
@@ -399,6 +402,8 @@ struct AppState {
     match_max_stale_secs: u64,
     /// Marketplace bidding engine (sealed-bid auctions, price discovery).
     bid_engine: Arc<BidEngine>,
+    /// Canonical ledger (append-only, hash-chained audit log).
+    ledger: LedgerWriter,
 }
 
 impl MetricsState {
@@ -444,6 +449,82 @@ impl MetricsState {
             peer_id: peer_id.to_string(),
             ip_address: None,
             max_sessions,
+        }
+    }
+}
+
+/// Persist a verified receipt through the settlement engine and emit the
+/// matching ledger events: one `UsageSnapshot` per stored receipt, then —
+/// when a new settlement row is created — `SettlementCreated` +
+/// `SettlementCompleted` sharing the receipt's correlation id. Shared by
+/// the live receipt loop and the shutdown drain so both paths stay
+/// identical.
+async fn settle_receipt_with_ledger(
+    receipt: StateReceipt,
+    receipt_settlement: &SettlementEngine,
+    bid_pricing: &echo_daemon::bidding::BidEngine,
+    ledger_settle: &LedgerWriter,
+) {
+    let receipt_id = receipt.receipt_id.clone();
+    let session_id = receipt.session_id.clone();
+    ledger_settle.try_emit(
+        LedgerDraft::new(
+            ledger_event::USAGE_SNAPSHOT,
+            "metering",
+            "system:metering",
+            serde_json::json!({
+                "receipt_id": receipt.receipt_id,
+                "session_id": receipt.session_id,
+                "bytes_transferred": receipt.bytes_transferred,
+                "direction": receipt.direction,
+                "sequence_number": receipt.sequence_number,
+                "counterparty_peer_id": receipt.counterparty_peer_id,
+            }),
+        )
+        .with_correlation(session_id),
+    );
+    let market_price = bid_pricing.awarded_price_for(&receipt.counterparty_peer_id);
+    match receipt_settlement
+        .settle_receipt_at_price(receipt, market_price)
+        .await
+    {
+        Ok(Some(record)) => {
+            ledger_settle.try_emit(
+                LedgerDraft::new(
+                    ledger_event::SETTLEMENT_CREATED,
+                    "settlement",
+                    "system:settlement",
+                    serde_json::json!({
+                        "receipt_id": record.receipt_id,
+                        "signer_peer_id": record.signer_peer_id,
+                        "counterparty_peer_id": record.counterparty_peer_id,
+                    }),
+                )
+                .with_correlation(record.receipt_id.clone()),
+            );
+            ledger_settle.try_emit(
+                LedgerDraft::new(
+                    ledger_event::SETTLEMENT_COMPLETED,
+                    "settlement",
+                    "system:settlement",
+                    serde_json::json!({
+                        "receipt_id": record.receipt_id,
+                        "bytes_settled": record.bytes_settled,
+                        "earnings_usd": record.earnings_usd,
+                        "settled_at": record.settled_at,
+                    }),
+                )
+                .with_correlation(record.receipt_id),
+            );
+        }
+        Ok(None) => {
+            debug!(
+                receipt = %receipt_id,
+                "receipt settlement skipped (duplicate or foreign)"
+            );
+        }
+        Err(e) => {
+            error!(error = %e, receipt = %receipt_id, "payout accumulation failed");
         }
     }
 }
@@ -1236,6 +1317,18 @@ async fn handle_create_auction(
         .bid_engine
         .create_auction(req, &app.local_peer_id, now_epoch_secs())
         .map_err(bid_err_to_http)?;
+    app.ledger.try_emit(
+        LedgerDraft::new(
+            ledger_event::AUCTION_CREATED,
+            "marketplace",
+            "system:marketplace",
+            serde_json::json!({
+                "auction": serde_json::to_value(&auction).unwrap_or_default(),
+                "requester_peer_id": app.local_peer_id,
+            }),
+        )
+        .with_correlation(auction.id.clone()),
+    );
     Ok(Json(auction))
 }
 
@@ -1335,6 +1428,20 @@ async fn handle_submit_bid(
         .bid_engine
         .submit_bid(&id, &peer, req.price_usd_per_gb, reputation, latency_ms, now_epoch_secs())
         .map_err(bid_err_to_http)?;
+    app.ledger.try_emit(
+        LedgerDraft::new(
+            ledger_event::BID_SUBMITTED,
+            "marketplace",
+            format!("provider:{peer}"),
+            serde_json::json!({
+                "auction_id": id.clone(),
+                "provider_peer_id": peer,
+                "bid": serde_json::to_value(&bid).unwrap_or_default(),
+                "remote_signed": signed.iter().all(|&p| p),
+            }),
+        )
+        .with_correlation(id),
+    );
     Ok(Json(bid))
 }
 
@@ -1348,6 +1455,25 @@ async fn handle_close_auction(
         .bid_engine
         .close_auction(&id, &app.local_peer_id, now_epoch_secs())
         .map_err(bid_err_to_http)?;
+    if auction.status == AuctionStatus::Awarded {
+        if let Some(award) = &auction.award {
+            app.ledger.try_emit(
+                LedgerDraft::new(
+                    ledger_event::AUCTION_AWARDED,
+                    "marketplace",
+                    "system:marketplace",
+                    serde_json::json!({
+                        "auction_id": auction.id.clone(),
+                        "winner_provider": award.provider_peer_id,
+                        "price_usd_per_gb": award.price_usd_per_gb,
+                        "bid_count": auction.bids.len(),
+                        "source": "early_close",
+                    }),
+                )
+                .with_correlation(auction.id.clone()),
+            );
+        }
+    }
     Ok(Json(auction))
 }
 
@@ -1473,6 +1599,29 @@ async fn main() -> Result<()> {
         Arc::new(sqlite_store::SqliteStore::new(&config.db_path).await?)
     };
 
+    // Step 2.5: Canonical ledger writer — the append-only, hash-chained
+    // audit log of every marketplace / settlement / reputation / security /
+    // tunnel action (see `ledger.rs`). Chain state (sequence + prev/root
+    // hashes) resumes from the database; emission is fire-and-forget from
+    // every call site so the ledger never blocks hot paths.
+    let ledger_node_id = format!("peer:{}", identity.peer_id_str());
+    let (ledger, ledger_task) = spawn_ledger_writer(
+        backend.clone(),
+        identity.clone(),
+        ledger_node_id,
+        LedgerWriter::network_from_env(),
+    );
+    ledger.try_emit(LedgerDraft::new(
+        ledger_event::NODE_REGISTERED,
+        "core",
+        "system:node",
+        serde_json::json!({
+            "peer_id": identity.peer_id_str(),
+            "region": config.region,
+            "node_mode": config.node_mode,
+        }),
+    ));
+
     // Step 3: Initialize availability engine
     // AVAIL_EWMA_ALPHA smooths advertised capacity (0.3 default; 1.0 = raw).
     let availability = Arc::new(RwLock::new(
@@ -1491,6 +1640,29 @@ async fn main() -> Result<()> {
     // shared by the tunnel service, auth middleware, and HTTP state.
     // `from_env` arms the burst detector (SECURITY_ALERT_* knobs).
     let security = Arc::new(SecurityCounters::from_env());
+
+    // Bridge burst-alert trips into the canonical ledger
+    // (SecurityAlertRaised) — one event per burst, forwarded from the
+    // sync counter path onto the async ledger writer.
+    {
+        let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel();
+        security.set_alert_sink(alert_tx);
+        let ledger_alert = ledger.clone();
+        tokio::spawn(async move {
+            while let Some(notice) = alert_rx.recv().await {
+                ledger_alert.try_emit(LedgerDraft::new(
+                    ledger_event::SECURITY_ALERT_RAISED,
+                    "security",
+                    "system:security",
+                    serde_json::json!({
+                        "events_in_window": notice.events_in_window,
+                        "threshold": notice.threshold,
+                        "window_secs": notice.window_secs,
+                    }),
+                ));
+            }
+        });
+    }
 
     // Step 3.6: Provider admission policy (blacklist / reputation / latency /
     // quotas). An entirely-open policy keeps the hot path free of DB lookups
@@ -1538,6 +1710,7 @@ async fn main() -> Result<()> {
     // auctions, providers bid on them; either may need finalization.
     {
         let engine = bid_engine.clone();
+        let ledger_sweep = ledger.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(2));
             loop {
@@ -1552,6 +1725,21 @@ async fn main() -> Result<()> {
                                 price = award.price_usd_per_gb,
                                 bids = auction.bids.len(),
                                 "auction closed at deadline"
+                            );
+                            ledger_sweep.try_emit(
+                                LedgerDraft::new(
+                                    ledger_event::AUCTION_AWARDED,
+                                    "marketplace",
+                                    "system:marketplace",
+                                    serde_json::json!({
+                                        "auction_id": auction.id.clone(),
+                                        "winner_provider": award.provider_peer_id,
+                                        "price_usd_per_gb": award.price_usd_per_gb,
+                                        "bid_count": auction.bids.len(),
+                                        "source": "deadline_sweep",
+                                    }),
+                                )
+                                .with_correlation(auction.id),
                             );
                         }
                         echo_daemon::bidding::AuctionStatus::Expired => {
@@ -1634,6 +1822,8 @@ async fn main() -> Result<()> {
     // and should NOT be called here to avoid the double-end-session bug.
     let event_reporter = reporter.clone();
     let settlement_rate = config.settlement_rate_usd_per_gb;
+    let ledger_tunnel = ledger.clone();
+    let ledger_tunnel_backend = backend.clone();
     tokio::spawn(async move {
         while let Some(event) = tunnel_rx.recv().await {
             match event {
@@ -1645,6 +1835,18 @@ async fn main() -> Result<()> {
                         session = %session_id,
                         peer = %remote_peer_id,
                         "tunnel session established"
+                    );
+                    ledger_tunnel.try_emit(
+                        LedgerDraft::new(
+                            ledger_event::TUNNEL_ESTABLISHED,
+                            "tunnel",
+                            format!("peer:{remote_peer_id}"),
+                            serde_json::json!({
+                                "session_id": session_id.clone(),
+                                "remote_peer_id": remote_peer_id.to_string(),
+                            }),
+                        )
+                        .with_correlation(session_id),
                     );
                 }
                 echo_daemon::tunnel::TunnelEvent::SessionClosed {
@@ -1659,6 +1861,52 @@ async fn main() -> Result<()> {
                         bytes_received,
                         "tunnel session closed"
                     );
+                    let exit_reason = details.as_ref().map(|d| d.exit_reason.clone());
+                    let remote_peer = details.as_ref().map(|d| d.remote_peer_id.clone());
+                    ledger_tunnel.try_emit(
+                        LedgerDraft::new(
+                            ledger_event::TUNNEL_TERMINATED,
+                            "tunnel",
+                            remote_peer
+                                .as_ref()
+                                .map(|p| format!("peer:{p}"))
+                                .unwrap_or_else(|| "system:tunnel".to_string()),
+                            serde_json::json!({
+                                "session_id": session_id.clone(),
+                                "bytes_sent": bytes_sent,
+                                "bytes_received": bytes_received,
+                                "exit_reason": exit_reason,
+                            }),
+                        )
+                        .with_correlation(session_id.clone()),
+                    );
+                    // ReputationChanged: tunnel teardown upserts the peer's
+                    // reputation row (tunnel.rs) *before* this event arrives,
+                    // so a read here sees the fresh score.
+                    if let Some(remote) = remote_peer {
+                        let reputation = ledger_tunnel_backend
+                            .get_peer_reputation(&remote)
+                            .await
+                            .ok()
+                            .flatten();
+                        if let Some(rep) = reputation {
+                            ledger_tunnel.try_emit(
+                                LedgerDraft::new(
+                                    ledger_event::REPUTATION_CHANGED,
+                                    "tunnel",
+                                    format!("peer:{remote}"),
+                                    serde_json::json!({
+                                        "peer_id": remote,
+                                        "reputation_score": rep.reputation_score,
+                                        "successful_sessions": rep.successful_sessions,
+                                        "failed_sessions": rep.failed_sessions,
+                                        "total_bytes_relayed": rep.total_bytes_relayed,
+                                    }),
+                                )
+                                .with_correlation(session_id.clone()),
+                            );
+                        }
+                    }
                     // Do NOT call end_session here — it's already handled by
                     // handle_incoming_connection on the provider side.
                     //
@@ -1788,11 +2036,21 @@ async fn main() -> Result<()> {
         let engine = bid_engine.clone();
         let book = auction_book.clone();
         let self_peer = identity.peer_id_str().to_string();
+        let ledger_disc = ledger.clone();
         tokio::spawn(async move {
             while let Some(event) = discovery_rx.recv().await {
                 match event {
                     echo_daemon::discovery::DiscoveryEvent::PeerFound(peer_id, addr) => {
                         info!(peer = %peer_id, addr = %addr, "peer discovered via DHT");
+                        ledger_disc.try_emit(LedgerDraft::new(
+                            ledger_event::PEER_DISCOVERED,
+                            "discovery",
+                            format!("peer:{peer_id}"),
+                            serde_json::json!({
+                                "peer_id": peer_id.to_string(),
+                                "addr": addr.to_string(),
+                            }),
+                        ));
                     }
                     echo_daemon::discovery::DiscoveryEvent::PeerDisconnected(peer_id) => {
                         info!(peer = %peer_id, "peer disconnected");
@@ -2002,6 +2260,10 @@ async fn main() -> Result<()> {
         // consumer) won a marketplace auction here settle at the award's
         // locked USD/GB price instead of the flat SETTLEMENT_RATE_USD_PER_GB.
         let bid_pricing = bid_engine.clone();
+        // Canonical ledger: UsageSnapshot + SettlementCreated/Completed
+        // per verified receipt (shared helper keeps the live loop and the
+        // shutdown drain identical).
+        let ledger_settle = ledger.clone();
         // G6: a counterparty's first receipt triggers a DHT lookup for the
         // award record (published by its consumer host). Cooldown-bounded;
         // an imported award reprices *subsequent* settlements.
@@ -2024,14 +2286,13 @@ async fn main() -> Result<()> {
                                         error!(error = %e, "receipt flush failed during shutdown");
                                     } else {
                                         count += 1;
-                                        let market_price =
-                                            bid_pricing.awarded_price_for(&receipt.counterparty_peer_id);
-                                        if let Err(e) = receipt_settlement
-                                            .settle_receipt_at_price(receipt, market_price)
-                                            .await
-                                        {
-                                            error!(error = %e, "receipt settlement flush failed during shutdown");
-                                        }
+                                        settle_receipt_with_ledger(
+                                            receipt,
+                                            &receipt_settlement,
+                                            &bid_pricing,
+                                            &ledger_settle,
+                                        )
+                                        .await;
                                     }
                                 }
                                 Ok(false) => {
@@ -2104,14 +2365,13 @@ async fn main() -> Result<()> {
                                             // Accumulate the verified receipt toward payout
                                             // at the market price when this counterparty
                                             // won an auction, else the flat rate.
-                                            let market_price = bid_pricing
-                                                .awarded_price_for(&receipt.counterparty_peer_id);
-                                            if let Err(e) = receipt_settlement
-                                                .settle_receipt_at_price(receipt, market_price)
-                                                .await
-                                            {
-                                                error!(error = %e, "payout accumulation failed");
-                                            }
+                                            settle_receipt_with_ledger(
+                                                receipt,
+                                                &receipt_settlement,
+                                                &bid_pricing,
+                                                &ledger_settle,
+                                            )
+                                            .await;
                                         }
                                     }
                                     Ok(false) => {
@@ -2529,6 +2789,7 @@ async fn main() -> Result<()> {
             blocked_peers,
             match_max_stale_secs: env_u64("MATCH_MAX_STALE_SECS", 300),
             bid_engine,
+            ledger,
         });
 
     let addr: SocketAddr = config.listen_addr.parse()?;
@@ -2551,6 +2812,15 @@ async fn main() -> Result<()> {
     if let Some(reporter) = &reporter {
         reporter.shutdown();
         sleep(Duration::from_secs(1)).await;
+    }
+
+    // Bounded wait for the ledger writer to finish draining its queue
+    // (long-lived tasks hold clones, so the channel may never fully close
+    // in-process — a timeout is expected, not an error).
+    match tokio::time::timeout(Duration::from_secs(2), ledger_task).await {
+        Ok(Ok(())) => debug!("ledger writer stopped cleanly"),
+        Ok(Err(e)) => warn!(error = %e, "ledger writer task panicked"),
+        Err(_) => warn!("ledger writer still running at shutdown deadline"),
     }
 
     info!("shutdown complete");

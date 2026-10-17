@@ -160,6 +160,7 @@ sequenceDiagram
 | **DHT namespacing** | Network-id prefixed Kademlia protocol | `DHT_NETWORK_ID` isolates swarms (`/<id>/kad/1.0.0`); bootstrap + local-only via `DHT_*` |
 | **Input validation** | Length caps on pre-handshake messages | session_id <= 256 bytes, peer_id <= 512 bytes |
 | **Receipt integrity** | Ed25519 signatures | Provider signs receipts; consumers verify |
+| **Canonical ledger** | Append-only hash-chained events | Every market/settlement/reputation/security/tunnel action emits a `LedgerEvent`; `sha256:<hex>` chain per node, ed25519-signed, `ECHO_NETWORK` separates networks |
 
 ## Capacity Engine
 
@@ -305,11 +306,30 @@ erDiagram
         index idx_settlements_counterparty
     }
 
+    LEDGER_EVENTS {
+        text event_id PK
+        bigint sequence NOT_NULL
+        text event_type NOT_NULL
+        integer event_version NOT_NULL
+        integer schema_version NOT_NULL
+        text ts NOT_NULL
+        text network NOT_NULL
+        text node_id NOT_NULL
+        text actor_id NOT NULL
+        text correlation_id
+        text parent_event_id
+        text hash NOT_NULL
+        text prev_hash
+        text event_json NOT_NULL
+        index idx_ledger_events_sequence
+    }
+
     NODES ||--o| PEER_REPUTATION : "peer_id"
     NODES ||--o{ CONNECTION_HISTORY : "local_peer_id"
     NODES ||--o{ STATE_RECEIPTS : "signer_peer_id"
     NODES ||--o| CAPABILITY_DESCRIPTORS : "peer_id"
     STATE_RECEIPTS ||--o| SETTLEMENTS : "receipt_id"
+    NODES ||--o{ LEDGER_EVENTS : "node_id"
 ```
 
 Schema is created and upgraded by versioned SQL migrations (`migrations/{postgres,sqlite}/*.sql`), applied in order by `migrator.rs` and tracked in a `schema_migrations` table.
@@ -320,9 +340,10 @@ Schema is created and upgraded by versioned SQL migrations (`migrations/{postgre
 src/
 ├── lib.rs              # MetricsBackend trait (17 methods) + shared base64 utils + constant_time_eq
 ├── accountability.rs   # Soft-slashing: composite score (reputation × violations × availability, trust decay) gating POLICY_MIN_ACCOUNTABILITY (167 lines)
-├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (2829 lines)
+├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (3099 lines)
 ├── models.rs           # 10 data models (NodeRow, PeerReputation, SettlementRecord, etc.)
 ├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, atomic writes + corrupt recovery (340 lines)
+├── ledger.rs           # Canonical append-only audit ledger: hash-chained, signed, versioned events (ECHO_NETWORK env) (812 lines)
 ├── discovery.rs        # libp2p Kademlia DHT swarm, command channel + result events, provider/market discovery (DHT_* env config)
 ├── tunnel.rs           # Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission (1230 lines)
 ├── consumer.rs         # Consumer forward listener: local apps → provider tunnel
@@ -491,6 +512,7 @@ See `GAPS.md` for the full integration status.
 | `DHT_LISTEN_ADDR` | `/ip4/0.0.0.0/tcp/0` | libp2p swarm listen multiaddr |
 | `DHT_BOOTSTRAP_PEERS` | (unset) | Comma-separated multiaddrs, each ending `/p2p/<peer-id>` |
 | `DHT_NETWORK_ID` | `echo` | Namespaces the Kademlia protocol to `/<id>/kad/1.0.0` |
+| `ECHO_NETWORK` | `echomesh-devnet` | Network tag stamped into every canonical ledger event (`LedgerEvent.network`); lets nodes on different networks keep separate audit chains |
 | `DHT_LOCAL_ONLY` | `false` | `true` = no bootstrap (dev mode) |
 | `API_ADVERTISE_ADDR` | (unset) | Publicly reachable `http://host:port` base URL of this node's REST API, published inside DHT auction records so remote providers can submit signed bids. Falls back to the detected public IP + `LISTEN_ADDR` port; auction publishing is skipped until one is known. |
 | `RELAY_TARGET` | `127.0.0.1:80` | Target address for incoming tunnel relay |
@@ -540,6 +562,7 @@ See `GAPS.md` for the full integration status.
 | `tracing` | 0.1 | Structured logging |
 | `chrono` | 0.4 | Date/time handling |
 | `serde` | 1.0 | Serialization / deserialization |
+| `sha2` | 0.10 | SHA-256 for the canonical ledger event hash chain |
 | `anyhow` | 1.0 | Error handling |
 | `futures` | 0.3 | Stream combinators |
 
@@ -555,22 +578,23 @@ listener instead (task 9).
 
 | # | Task | Line | Description |
 |---|------|------|-------------|
-| — | **Dashboard Reporter** | 1624 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
-| — | **Public IP detection** | 1900 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
-| — | **Auction sweeper** | 1541 | Every 2 s: finalizes expired auctions (Vickrey award or clean expiry) — the `bidding.rs` deadline sweep |
-| 1 | **Tunnel Event Handler** | 1637 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service |
-| 2 | **Tunnel Listener** | 1704 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
-| 3 | **Discovery Event Loop** | 1777 | Runs the libp2p swarm event loop; executes `DiscoveryCommand` (PutRecord/GetRecord/StartProviding/GetProviders) and emits the matching `DiscoveryEvent` results |
-| 4 | **Discovery Event Handler** | 1791 | Routes `PeerFound/PeerDisconnected` and, for G6, `auction/…` + `award/…` records into the foreign auction book / award log, chaining follow-up DHT lookups (index → auction) |
-| 5 | **Heartbeat** | 1917 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
-| 6 | **Metric Cleanup** | 1924 | Removes metrics older than 30 days (daily) |
-| 7 | **Capability Publisher** | 1948 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
-| 8 | **Receipt Settlement** | 2013 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine`; looks up award-locked market prices (G6) before falling back to the flat rate |
+| — | **Ledger writer** | 1608 (both modes) | `ledger.rs` — drains `LedgerWriter::try_emit` drafts in strict FIFO, advances the per-node sequence/prev-hash chain, signs + persists `ledger_events` (spawned before every other task) |
+| — | **Dashboard Reporter** | 1812 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
+| — | **Public IP detection** | 2158 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
+| — | **Auction sweeper** | 1714 | Every 2 s: finalizes expired auctions (Vickrey award or clean expiry) — the `bidding.rs` deadline sweep; emits `AuctionAwarded` to the ledger |
+| 1 | **Tunnel Event Handler** | 1827 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service; emits `TunnelEstablished`/`TunnelTerminated` + `ReputationChanged` |
+| 2 | **Tunnel Listener** | 1952 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
+| 3 | **Discovery Event Loop** | 2025 | Runs the libp2p swarm event loop; executes `DiscoveryCommand` (PutRecord/GetRecord/StartProviding/GetProviders) and emits the matching `DiscoveryEvent` results |
+| 4 | **Discovery Event Handler** | 2040 | Routes `PeerFound/PeerDisconnected` and, for G6, `auction/…` + `award/…` records into the foreign auction book / award log, chaining follow-up DHT lookups (index → auction); emits `PeerDiscovered` |
+| 5 | **Heartbeat** | 2175 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
+| 6 | **Metric Cleanup** | 2182 | Removes metrics older than 30 days (daily) |
+| 7 | **Capability Publisher** | 2206 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
+| 8 | **Receipt Settlement** | 2275 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine`; looks up award-locked market prices (G6) before falling back to the flat rate; emits `UsageSnapshot` + `SettlementCreated`/`SettlementCompleted` |
 | 9 | **Consumer Listener** | `consumer.rs` (consumer only) | Accepts local app connections on `CONSUMER_LISTEN_ADDR`, dials the provider (`connect_to_provider`), relays app traffic through the Noise tunnel without issuing consumer receipts |
-| 10 | **Market DHT sync** | 2165 | (G6) Publishes this node's open-auction records + `auctions_by_host` index + region announce every 10s and pending award notices every 2s to Kademlia; skips publishing until an advertise API address (`API_ADVERTISE_ADDR` or detected public IP + port) is known |
-| — | **Marketplace auto-bid** | 2319 (`BID_AUTO=true`, provider) | Polls local `GET /auctions` **and** DHT-discovered remote auctions (exact region match), submitting bids — signed ed25519 payloads for remote hosts |
+| 10 | **Market DHT sync** | 2425 | (G6) Publishes this node's open-auction records + `auctions_by_host` index + region announce every 10s and pending award notices every 2s to Kademlia; skips publishing until an advertise API address (`API_ADVERTISE_ADDR` or detected public IP + port) is known |
+| — | **Marketplace auto-bid** | 2579 (`BID_AUTO=true`, provider) | Polls local `GET /auctions` **and** DHT-discovered remote auctions (exact region match), submitting bids — signed ed25519 payloads for remote hosts |
 
-Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 2539).
+Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 2799).
 
 ## Consumer Mode Quick Start
 
@@ -670,4 +694,5 @@ sequenceDiagram
 | **Token bucket backpressure** | Sleep-based backpressure is simpler than channel-based flow control |
 | **PeerId-based reputation** | Stable identity across sessions (vs. SocketAddr which changes) |
 | **Accumulative reputation** | `total_bytes += delta` preserves historical contribution |
+| **Append-only hash-chained ledger** | Every market/settlement/reputation/security/tunnel action writes a signed `LedgerEvent` with `sha256` prev-hash chaining — an immutable audit trail any third party can verify offline |
 | **Domain-separated prologue** | `"EchoMesh\|v1\|{session_id}"` prevents cross-session replay attacks |

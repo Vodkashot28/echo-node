@@ -7,7 +7,7 @@ Single Rust crate (`echo-daemon`), edition 2021, no workspace.
 ```sh
 cargo check                       # type-check only (fast)
 cargo clippy --all-targets        # lint
-cargo test                        # 191 tests (146 lib, 20 main, 4 bidding e2e, 15 integration, 3 tunnel e2e, 2 dht market e2e, 1 consumer e2e)
+cargo test                        # 202 tests (156 lib, 20 main, 4 bidding e2e, 16 integration, 3 tunnel e2e, 2 dht market e2e, 1 consumer e2e)
 cargo build                       # compile
 ```
 
@@ -22,7 +22,7 @@ cargo build                       # compile
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `main.rs` | 2829 | Entry point, REST API (axum), heartbeat, background tasks, `NODE_MODE` gating |
+| `main.rs` | 3099 | Entry point, REST API (axum), heartbeat, background tasks, `NODE_MODE` gating |
 | `tunnel.rs` | 1230 | Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission, consumer-side `connect_to_provider` |
 | `bidding.rs` | 1846 | Marketplace price discovery: sealed-bid auctions, quality-adjusted scoring, Vickrey/first-price awards, 2s deadline sweeper (`BID_*` env); G6 wire types (`AuctionRecord`, auction-index encoding), `AuctionBook`, signed-bid verify, foreign-award import |
 | `consumer.rs` | 125 | Consumer forward listener: local apps → provider tunnel |
@@ -36,11 +36,12 @@ cargo build                       # compile
 | `discovery.rs` | 528 | libp2p Kademlia DHT swarm (`DHT_*` env: bootstrap peers, network-id namespace, local-only mode); command channel (`DiscoveryCommand`) + result events (`DiscoveryEvent`); forced `kad::Mode::Server` so inbound record storage works without a confirmed external address |
 | `auth.rs` | 414 | Scoped API keys (`API_KEYS` JSON + legacy `API_KEY`), `require_scope` axum middleware |
 | `policy.rs` | 754 | Provider admission policy (`POLICY_*` env): reputation/latency gates + per-peer/region quotas (RAII permits), idle-time trust decay, soft-slashing gate |
-| `security.rs` | 523 | `SecurityCounters` — failure counters + bounded event ring + sliding-window burst alerts (`SECURITY_ALERT_*`) + per-peer violation attribution, surfaced in `/status`, `/health`, `GET /security` |
+| `security.rs` | 584 | `SecurityCounters` — failure counters + bounded event ring + sliding-window burst alerts (`SECURITY_ALERT_*`) + per-peer violation attribution, surfaced in `/status`, `/health`, `GET /security`; alert sink feeds the ledger's `SecurityAlertRaised` |
 | `accountability.rs` | 167 | Soft-slashing: `soft_slash_score` = decayed reputation × violation discount × availability factor (no on-chain staking); gates `POLICY_MIN_ACCOUNTABILITY` |
 | `identity.rs` | 340 | Ed25519 + X25519 keypairs, file permissions, atomic writes + corrupt-file recovery |
+| `ledger.rs` | 812 | Canonical append-only audit ledger: `LedgerEvent` envelope (ed25519-signed, `sha256` hash chain, `ECHO_NETWORK` env), ULID event ids, `LedgerWriter::try_emit` → single FIFO writer task that advances the per-node sequence/prev/root chain and persists `ledger_events` |
 | `telemetry.rs` | 1052 | Optional dashboard bridge: heartbeat frames + session-close events → Supabase `report-telemetry` edge function; 32-dim feature vector, UUID node id, non-blocking bounded channel (`ReporterMessage`), durable disk spool + exponential backoff + shutdown flush |
-| `lib.rs` | 143 | `MetricsBackend` trait (17 methods), base64 utils, `constant_time_eq`, module declarations |
+| `lib.rs` | 153 | `MetricsBackend` trait (19 methods), base64 utils, `constant_time_eq`, module declarations |
 
 **Data flow:** `main.rs` wires everything. `MetricsBackend` trait abstracts storage — choose Neon or SQLite at startup based on `DATABASE_URL`.
 
@@ -100,6 +101,7 @@ Critical ones beyond README basics:
 - `DASHBOARD_TELEMETRY_URL` + `DASHBOARD_TELEMETRY_TOKEN` + `DASHBOARD_USER_ID` — enable the opt-in heartbeat → dashboard bridge (`telemetry.rs`); `DASHBOARD_NODE_ID` pins the dashboard node UUID. See `GAPS.md`. The bridge is fully off by default and never blocks the heartbeat.
 - `DASHBOARD_TELEMETRY_SPOOL` (default `data/telemetry_spool.jsonl`) + `DASHBOARD_TELEMETRY_MAX_QUEUE` (default 256) + `DASHBOARD_TELEMETRY_BACKOFF_BASE_MS` (500) / `..._MAX_MS` (30000) — durable frame queue: overflow drops oldest, failures back off exponentially with jitter, unsent frames are flushed to the spool on shutdown and replayed on next boot.
 - `RUST_LOG` — default `echo_daemon=info`; set to `debug` for verbose output
+- `ECHO_NETWORK` — network tag stamped into every canonical ledger event (`LedgerEvent.network`; default `echomesh-devnet`); nodes on different networks keep separate audit chains
 
 ## Dashboard Sync (not a cargo target)
 
@@ -112,8 +114,8 @@ and off by default. Run it under a `while true` supervisor loop. See
 
 ## Testing
 
-- `src/` has pure unit tests (146 total: meter 22, bidding 29, policy 15, availability 15, telemetry 13, security 10, migrator 8, auth 8, accountability 6, models 6, settlement 1, discovery 5, tunnel 4, identity 4, …). No external services required.
-- `tests/integration.rs` has 15 tests against a real SQLite store (tempfile-based): migration lifecycle, CRUD, concurrency, identity persistence, receipt round-trips, settlement.
+- `src/` has pure unit tests (156 total: bidding 29, meter 22, policy 15, availability 15, telemetry 13, security 11, ledger 9, migrator 8, auth 8, accountability 6, models 6, discovery 5, tunnel 4, identity 4, settlement 1). No external services required.
+- `tests/integration.rs` has 16 tests against a real SQLite store (tempfile-based): migration lifecycle, CRUD, concurrency, identity persistence, receipt round-trips, settlement, and a full ledger-writer round trip (append 3 + restart + resume at sequence 4, hash-chain links, `verify_event` on every row).
 - `tests/bidding_e2e.rs` has 4 tests covering the market pipeline: auction → sealed bids → deadline sweep → Vickrey award → settlement at the locked price (vs flat-rate fallback), budget-cap/requester guards, clean no-bid expiry, pricing-rule parsing.
 - `tests/dht_market_e2e.rs` has 2 tests running two in-process libp2p swarms (local-only, unique `network_id` per run): an auction record (index + record) propagates host→peer over Kademlia, and an award record reaches the winning provider. No external network required.
 - `tests/tunnel_e2e.rs` runs an in-process Noise_XX tunnel end-to-end: handshake, encrypted relay through an echo target, metering receipts, provider-side DB teardown (connection history, reputation), a slowloris test (stalled handshake → deadline close + counter), and a soft-slashing test (`min_accountability` gate denies post-handshake, counts the rejection, attributes a per-peer violation).

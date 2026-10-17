@@ -616,3 +616,159 @@ async fn sqlite_cleanup_old_metrics() {
         .unwrap();
     assert_eq!(count.0, 1, "recent metric should remain");
 }
+
+// ──────────────────────────────────────────────────────────────
+// Ledger (append-only hash-chained event log)
+// ──────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn ledger_writer_persists_hash_chained_events_and_resumes() {
+    use echo_daemon::ledger::{
+        event_type, spawn_ledger_writer, verify_event, LedgerDraft, LedgerEvent,
+    };
+
+    let dir = TempDir::new().unwrap();
+    let db_path = format!("sqlite:{}", dir.path().join("ledger.db").display());
+    let store = Arc::new(SqliteStore::new(&db_path).await.unwrap());
+    let identity =
+        NodeIdentity::load_or_generate(&temp_identity_path(dir.path()), "test").unwrap();
+    let node_id = format!("peer:{}", identity.peer_id_str());
+    let network = "echomesh-testnet";
+
+    // Three marketplace events through the real writer; dropping the only
+    // sender closes the channel and lets the writer drain FIFO then exit.
+    let (writer, task) = spawn_ledger_writer(
+        store.clone(),
+        identity.clone(),
+        node_id.clone(),
+        network.to_string(),
+    );
+    writer.try_emit(
+        LedgerDraft::new(
+            event_type::AUCTION_CREATED,
+            "marketplace",
+            "system:marketplace",
+            serde_json::json!({"auction_id": "a1"}),
+        )
+        .with_correlation("a1"),
+    );
+    writer.try_emit(
+        LedgerDraft::new(
+            event_type::BID_SUBMITTED,
+            "marketplace",
+            "provider:p1",
+            serde_json::json!({"auction_id": "a1", "price_usd_per_gb": 0.4}),
+        )
+        .with_correlation("a1"),
+    );
+    writer.try_emit(
+        LedgerDraft::new(
+            event_type::AUCTION_AWARDED,
+            "marketplace",
+            "system:marketplace",
+            serde_json::json!({"auction_id": "a1", "winner_provider": "p1"}),
+        )
+        .with_correlation("a1"),
+    );
+    drop(writer);
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("ledger writer drains and exits when senders drop")
+        .expect("writer task ok");
+
+    // Chain state: three events, last hash + genesis recorded.
+    let chain = store
+        .load_ledger_chain_state(&node_id)
+        .await
+        .unwrap()
+        .expect("chain state after append");
+    assert_eq!(chain.last_sequence, 3);
+
+    // Fetch the rows and verify envelope integrity end-to-end.
+    let rows: Vec<(i64, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT sequence, event_json, hash, prev_hash FROM ledger_events WHERE node_id = ? ORDER BY sequence",
+    )
+    .bind(&node_id)
+    .fetch_all(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 3, "all three drafts persisted");
+
+    let mut prev: Option<String> = None;
+    let mut genesis: Option<String> = None;
+    for (i, (seq, json, hash, prev_hash)) in rows.iter().enumerate() {
+        let ev: LedgerEvent = serde_json::from_str(json).expect("event_json parses");
+        assert_eq!(*seq as u64, (i + 1) as u64, "sequence starts at 1, increments");
+        assert_eq!(ev.sequence, (i + 1) as u64);
+        assert_eq!(ev.network, network);
+        assert_eq!(ev.hash, *hash, "stored hash matches recomputed-hash source");
+        assert_eq!(ev.provenance.prev_hash, *prev_hash);
+        assert!(verify_event(&ev).expect("verify"), "event {i} verifies");
+        if i == 0 {
+            genesis = Some(hash.clone());
+            assert!(prev_hash.is_none(), "genesis has no prev_hash");
+            assert!(ev.provenance.root_hash.is_none(), "genesis has no root_hash");
+        } else {
+            assert_eq!(
+                prev_hash.as_deref(),
+                prev.as_deref(),
+                "event {i} links to predecessor"
+            );
+            assert_eq!(
+                ev.provenance.root_hash.as_deref(),
+                genesis.as_deref(),
+                "root_hash pinned to genesis"
+            );
+        }
+        prev = Some(hash.clone());
+    }
+    assert_eq!(chain.last_hash, prev.expect("3 hashes"), "chain state last_hash");
+    assert_eq!(
+        chain.genesis_hash,
+        genesis.expect("genesis"),
+        "chain state genesis_hash"
+    );
+
+    // Restart: a fresh writer resumes the chain at sequence 4.
+    let (writer2, task2) = spawn_ledger_writer(
+        store.clone(),
+        identity.clone(),
+        node_id.clone(),
+        network.to_string(),
+    );
+    writer2.try_emit(LedgerDraft::new(
+        event_type::NODE_REGISTERED,
+        "core",
+        "system:node",
+        serde_json::json!({}),
+    ));
+    drop(writer2);
+    tokio::time::timeout(std::time::Duration::from_secs(5), task2)
+        .await
+        .expect("second writer drains")
+        .expect("second writer ok");
+
+    let chain2 = store
+        .load_ledger_chain_state(&node_id)
+        .await
+        .unwrap()
+        .expect("chain state after resume");
+    assert_eq!(chain2.last_sequence, 4, "sequence resumes after restart");
+    assert_eq!(chain2.genesis_hash, chain.genesis_hash, "genesis stable");
+
+    let row4: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT hash, prev_hash, event_json FROM ledger_events WHERE node_id = ? AND sequence = 4",
+    )
+    .bind(&node_id)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(row4.1.as_deref(), Some(chain.last_hash.as_str()), "event 4 links to event 3");
+    let ev4: LedgerEvent = serde_json::from_str(&row4.2).expect("event 4 parses");
+    assert!(verify_event(&ev4).expect("verify"), "event 4 verifies");
+    assert_eq!(
+        ev4.provenance.root_hash.as_deref(),
+        Some(chain.genesis_hash.as_str()),
+        "root still genesis"
+    );
+}
