@@ -846,7 +846,7 @@ impl MetricsBackend for SqliteStore {
 
     async fn cleanup_old_auctions(&self, older_than: i64) -> Result<u64> {
         let result = sqlx::query(
-            "DELETE FROM auctions WHERE status IN ('closed', 'cancelled') AND closes_at < ?"
+            "DELETE FROM auctions WHERE status IN ('awarded', 'expired', 'cancelled') AND closes_at < ?"
         )
         .bind(older_than)
         .execute(&self.pool)

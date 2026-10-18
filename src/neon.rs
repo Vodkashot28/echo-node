@@ -856,7 +856,7 @@ impl MetricsBackend for NeonStore {
 
     async fn cleanup_old_auctions(&self, older_than: i64) -> Result<u64> {
         let result = sqlx::query(
-            "DELETE FROM auctions WHERE status IN ('closed', 'cancelled') AND closes_at < $1"
+            "DELETE FROM auctions WHERE status IN ('awarded', 'expired', 'cancelled') AND closes_at < $1"
         )
         .bind(older_than)
         .execute(&self.pool)

@@ -42,6 +42,11 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "session_tickets_and_auctions",
             sql: include_str!("../migrations/postgres/006_session_tickets_and_auctions.sql"),
         },
+        Migration {
+            version: 7,
+            name: "auctions_status_constraint",
+            sql: include_str!("../migrations/postgres/007_auctions_status_constraint.sql"),
+        },
     ]
 }
 
@@ -77,6 +82,11 @@ pub fn sqlite_migrations() -> Vec<Migration> {
             version: 6,
             name: "session_tickets_and_auctions",
             sql: include_str!("../migrations/sqlite/006_session_tickets_and_auctions.sql"),
+        },
+        Migration {
+            version: 7,
+            name: "auctions_status_constraint",
+            sql: include_str!("../migrations/sqlite/007_auctions_status_constraint.sql"),
         },
     ]
 }

@@ -197,7 +197,7 @@ async fn auction_list_by_status() {
                 60,
                 now + i,
                 now + 60 + i,
-                if i < 3 { "open" } else { "closed" },
+                if i < 3 { "open" } else { "cancelled" },
             )
             .await
             .unwrap();
@@ -207,9 +207,9 @@ async fn auction_list_by_status() {
     let open = backend.list_auctions("open", 100).await.unwrap();
     assert_eq!(open.len(), 3, "should have 3 open auctions");
 
-    // List closed auctions
-    let closed = backend.list_auctions("closed", 100).await.unwrap();
-    assert_eq!(closed.len(), 2, "should have 2 closed auctions");
+    // List cancelled auctions
+    let closed = backend.list_auctions("cancelled", 100).await.unwrap();
+    assert_eq!(closed.len(), 2, "should have 2 cancelled auctions");
 }
 
 #[tokio::test]
@@ -241,7 +241,7 @@ async fn auction_update_status_with_winner() {
     backend
         .update_auction_status(
             auction_id,
-            "closed",
+            "awarded",
             Some("winner-peer-id"),
             Some(0.55),
             Some(now + 45),
@@ -251,7 +251,7 @@ async fn auction_update_status_with_winner() {
 
     // Verify status updated
     let auction = backend.get_auction(auction_id).await.unwrap().unwrap();
-    assert_eq!(auction["status"], "closed");
+    assert_eq!(auction["status"], "awarded");
     assert_eq!(auction["winning_peer_id"], "winner-peer-id");
     assert_eq!(auction["winning_price"], 0.55);
 }
@@ -355,19 +355,37 @@ async fn auction_cleanup_old_closed() {
     let now = chrono::Utc::now().timestamp();
     let old = now - 86400 * 10; // 10 days ago
 
-    // Create old closed auction
+    // Create old awarded auction (should be cleaned)
     backend
-        .upsert_auction("old-closed", "req", "region", 100.0, 1.0, 30, old, old + 30, "closed")
+        .upsert_auction("old-awarded", "req", "region", 100.0, 1.0, 30, old, old + 30, "open")
+        .await
+        .unwrap();
+    backend
+        .update_auction_status("old-awarded", "awarded", Some("provider-1"), Some(0.5), Some(old + 25))
         .await
         .unwrap();
 
-    // Create recent closed auction
+    // Create old cancelled auction (should be cleaned)
     backend
-        .upsert_auction("recent-closed", "req", "region", 100.0, 1.0, 30, now - 100, now - 70, "closed")
+        .upsert_auction("old-cancelled", "req", "region", 100.0, 1.0, 30, old, old + 30, "open")
+        .await
+        .unwrap();
+    backend
+        .update_auction_status("old-cancelled", "cancelled", None, None, None)
         .await
         .unwrap();
 
-    // Create old open auction (should not be cleaned)
+    // Create recent awarded auction (should not be cleaned)
+    backend
+        .upsert_auction("recent-awarded", "req", "region", 100.0, 1.0, 30, now - 100, now - 70, "open")
+        .await
+        .unwrap();
+    backend
+        .update_auction_status("recent-awarded", "awarded", Some("provider-1"), Some(0.5), Some(now - 75))
+        .await
+        .unwrap();
+
+    // Create old open auction (should not be cleaned — still active)
     backend
         .upsert_auction("old-open", "req", "region", 100.0, 1.0, 30, old, old + 30, "open")
         .await
@@ -376,15 +394,19 @@ async fn auction_cleanup_old_closed() {
     // Cleanup auctions older than 7 days
     let threshold = now - (86400 * 7);
     let cleaned = backend.cleanup_old_auctions(threshold).await.unwrap();
-    assert_eq!(cleaned, 1, "should clean up 1 old closed auction");
+    assert_eq!(cleaned, 2, "should clean up 2 old terminal auctions (awarded + cancelled)");
 
-    // Verify old closed is gone
-    let old_closed = backend.get_auction("old-closed").await.unwrap();
-    assert!(old_closed.is_none(), "old closed auction should be removed");
+    // Verify old awarded is gone
+    let old_awarded = backend.get_auction("old-awarded").await.unwrap();
+    assert!(old_awarded.is_none(), "old awarded auction should be removed");
 
-    // Verify recent closed remains
-    let recent = backend.get_auction("recent-closed").await.unwrap();
-    assert!(recent.is_some(), "recent closed auction should remain");
+    // Verify old cancelled is gone
+    let old_cancelled = backend.get_auction("old-cancelled").await.unwrap();
+    assert!(old_cancelled.is_none(), "old cancelled auction should be removed");
+
+    // Verify recent awarded remains
+    let recent = backend.get_auction("recent-awarded").await.unwrap();
+    assert!(recent.is_some(), "recent awarded auction should remain");
 
     // Verify old open remains (not cleaned based on status)
     let old_open = backend.get_auction("old-open").await.unwrap();

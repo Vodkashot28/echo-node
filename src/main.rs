@@ -1323,6 +1323,27 @@ async fn handle_create_auction(
         .bid_engine
         .create_auction(req, &app.local_peer_id, now_epoch_secs())
         .map_err(bid_err_to_http)?;
+
+    // Persist the new auction so it survives restarts and can be queried
+    // by external tooling (CLI, dashboard) independently of the in-memory engine.
+    if let Err(e) = app
+        .backend
+        .upsert_auction(
+            &auction.id,
+            &auction.requester_peer_id,
+            &auction.region,
+            (auction.min_upload_mbps + auction.min_download_mbps) / 2.0,
+            auction.max_price_usd_per_gb,
+            auction.window_secs as i64,
+            auction.created_at as i64,
+            auction.closes_at as i64,
+            "open",
+        )
+        .await
+    {
+        warn!(auction = %auction.id, error = %e, "failed to persist auction creation");
+    }
+
     app.ledger.try_emit(
         LedgerDraft::new(
             ledger_event::AUCTION_CREATED,
@@ -1434,6 +1455,24 @@ async fn handle_submit_bid(
         .bid_engine
         .submit_bid(&id, &peer, req.price_usd_per_gb, reputation, latency_ms, now_epoch_secs())
         .map_err(bid_err_to_http)?;
+
+    // Persist the bid so the auction's price history survives a restart.
+    if let Err(e) = app
+        .backend
+        .insert_bid(
+            &bid.id,
+            &bid.auction_id,
+            &bid.provider_peer_id,
+            bid.price_usd_per_gb,
+            bid.reputation_score,
+            bid.avg_latency_ms,
+            bid.submitted_at as i64,
+        )
+        .await
+    {
+        warn!(bid = %bid.id, auction = %id, error = %e, "failed to persist bid");
+    }
+
     app.ledger.try_emit(
         LedgerDraft::new(
             ledger_event::BID_SUBMITTED,
@@ -1461,6 +1500,27 @@ async fn handle_close_auction(
         .bid_engine
         .close_auction(&id, &app.local_peer_id, now_epoch_secs())
         .map_err(bid_err_to_http)?;
+
+    // Persist the updated status (awarded or expired) and winner info.
+    {
+        let (status, winner_peer_id, winner_price, awarded_at) = match &auction.award {
+            Some(award) => (
+                "awarded",
+                Some(award.provider_peer_id.as_str()),
+                Some(award.price_usd_per_gb),
+                Some(award.awarded_at as i64),
+            ),
+            None => ("expired", None, None, None),
+        };
+        if let Err(e) = app
+            .backend
+            .update_auction_status(&id, status, winner_peer_id, winner_price, awarded_at)
+            .await
+        {
+            warn!(auction = %id, status, error = %e, "failed to persist auction close");
+        }
+    }
+
     if auction.status == AuctionStatus::Awarded {
         if let Some(award) = &auction.award {
             app.ledger.try_emit(
@@ -1492,6 +1552,16 @@ async fn handle_cancel_auction(
         .bid_engine
         .cancel_auction(&id, &app.local_peer_id)
         .map_err(bid_err_to_http)?;
+
+    // Persist the cancellation so the DB reflects the terminal state.
+    if let Err(e) = app
+        .backend
+        .update_auction_status(&id, "cancelled", None, None, None)
+        .await
+    {
+        warn!(auction = %id, error = %e, "failed to persist auction cancellation");
+    }
+
     Ok(Json(auction))
 }
 
@@ -1735,6 +1805,7 @@ async fn run_daemon() -> Result<()> {
     {
         let engine = bid_engine.clone();
         let ledger_sweep = ledger.clone();
+        let backend_sweep = backend.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(2));
             loop {
@@ -1750,6 +1821,19 @@ async fn run_daemon() -> Result<()> {
                                 bids = auction.bids.len(),
                                 "auction closed at deadline"
                             );
+                            // Persist the awarded status + winner to the DB.
+                            if let Err(e) = backend_sweep
+                                .update_auction_status(
+                                    &auction.id,
+                                    "awarded",
+                                    Some(award.provider_peer_id.as_str()),
+                                    Some(award.price_usd_per_gb),
+                                    Some(award.awarded_at as i64),
+                                )
+                                .await
+                            {
+                                warn!(auction = %auction.id, error = %e, "failed to persist sweep award");
+                            }
                             ledger_sweep.try_emit(
                                 LedgerDraft::new(
                                     ledger_event::AUCTION_AWARDED,
@@ -1768,6 +1852,13 @@ async fn run_daemon() -> Result<()> {
                         }
                         echo_daemon::bidding::AuctionStatus::Expired => {
                             debug!(auction = %auction.id, "auction expired with no bids");
+                            // Persist the expired status to the DB.
+                            if let Err(e) = backend_sweep
+                                .update_auction_status(&auction.id, "expired", None, None, None)
+                                .await
+                            {
+                                warn!(auction = %auction.id, error = %e, "failed to persist sweep expiry");
+                            }
                         }
                         _ => {}
                     }
@@ -2220,6 +2311,41 @@ async fn run_daemon() -> Result<()> {
                 }
                 Err(e) => {
                     error!(error = %e, "data retention cleanup failed");
+                }
+            }
+        }
+    });
+
+    // Step 7.5: Auction and session-ticket cleanup (daily).
+    // Auctions in terminal states (awarded/expired/cancelled) older than
+    // `retention_days` days are deleted along with their bids (ON DELETE
+    // CASCADE). Expired session tickets are removed on the same cadence.
+    let auction_cleanup_backend = backend.clone();
+    let auction_retention_days = config.retention_days;
+    tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_secs(86400)).await;
+            let cutoff_secs = chrono::Utc::now().timestamp()
+                - auction_retention_days * 86400;
+            match auction_cleanup_backend
+                .cleanup_old_auctions(cutoff_secs)
+                .await
+            {
+                Ok(rows) if rows > 0 => {
+                    info!(rows_deleted = rows, "auction retention cleanup completed");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    error!(error = %e, "auction retention cleanup failed");
+                }
+            }
+            match auction_cleanup_backend.cleanup_expired_tickets().await {
+                Ok(rows) if rows > 0 => {
+                    info!(rows_deleted = rows, "expired session tickets cleaned up");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    error!(error = %e, "session ticket cleanup failed");
                 }
             }
         }
