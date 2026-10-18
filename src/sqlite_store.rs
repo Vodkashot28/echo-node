@@ -619,4 +619,239 @@ impl MetricsBackend for SqliteStore {
             genesis_hash: genesis.0,
         }))
     }
+
+    async fn store_session_ticket(
+        &self,
+        session_id: &str,
+        consumer_peer_id: &str,
+        ticket_data: &[u8],
+        expires_at: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO session_tickets (session_id, consumer_peer_id, ticket_data, expires_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(session_id) DO UPDATE SET
+                ticket_data = excluded.ticket_data,
+                expires_at = excluded.expires_at",
+        )
+        .bind(session_id)
+        .bind(consumer_peer_id)
+        .bind(ticket_data)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await
+        .context("sqlite store session ticket")?;
+        Ok(())
+    }
+
+    async fn get_session_ticket(&self, session_id: &str) -> Result<Option<Vec<u8>>> {
+        let now = chrono::Utc::now().timestamp();
+        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+            "SELECT ticket_data FROM session_tickets
+             WHERE session_id = ? AND expires_at > ?",
+        )
+        .bind(session_id)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await
+        .context("sqlite get session ticket")?;
+        Ok(row.map(|r| r.0))
+    }
+
+    async fn cleanup_expired_tickets(&self) -> Result<u64> {
+        let now = chrono::Utc::now().timestamp();
+        let result = sqlx::query("DELETE FROM session_tickets WHERE expires_at <= ?")
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .context("sqlite cleanup expired tickets")?;
+        Ok(result.rows_affected())
+    }
+
+    async fn upsert_auction(
+        &self,
+        auction_id: &str,
+        requester_peer_id: &str,
+        region: &str,
+        bandwidth_mbps: f64,
+        budget_usd_per_gb: f64,
+        window_secs: i64,
+        created_at: i64,
+        closes_at: i64,
+        status: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO auctions 
+             (auction_id, requester_peer_id, region, bandwidth_mbps, budget_usd_per_gb, 
+              window_secs, created_at, closes_at, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(auction_id) DO UPDATE SET
+                status = excluded.status,
+                closes_at = excluded.closes_at",
+        )
+        .bind(auction_id)
+        .bind(requester_peer_id)
+        .bind(region)
+        .bind(bandwidth_mbps)
+        .bind(budget_usd_per_gb)
+        .bind(window_secs)
+        .bind(created_at)
+        .bind(closes_at)
+        .bind(status)
+        .execute(&self.pool)
+        .await
+        .context("sqlite upsert auction")?;
+        Ok(())
+    }
+
+    async fn get_auction(&self, auction_id: &str) -> Result<Option<serde_json::Value>> {
+        let row: Option<(String, String, String, f64, f64, i64, i64, i64, String, Option<String>, Option<f64>, Option<i64>)> = sqlx::query_as(
+            "SELECT auction_id, requester_peer_id, region, bandwidth_mbps, budget_usd_per_gb,
+                    window_secs, created_at, closes_at, status, winning_peer_id, winning_price, awarded_at
+             FROM auctions WHERE auction_id = ?",
+        )
+        .bind(auction_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("sqlite get auction")?;
+
+        Ok(row.map(|r| {
+            serde_json::json!({
+                "auction_id": r.0,
+                "requester_peer_id": r.1,
+                "region": r.2,
+                "bandwidth_mbps": r.3,
+                "budget_usd_per_gb": r.4,
+                "window_secs": r.5,
+                "created_at": r.6,
+                "closes_at": r.7,
+                "status": r.8,
+                "winning_peer_id": r.9,
+                "winning_price": r.10,
+                "awarded_at": r.11,
+            })
+        }))
+    }
+
+    async fn list_auctions(&self, status: &str, limit: i64) -> Result<Vec<serde_json::Value>> {
+        let rows: Vec<(String, String, String, f64, f64, i64, i64, i64, String, Option<String>, Option<f64>, Option<i64>)> = sqlx::query_as(
+            "SELECT auction_id, requester_peer_id, region, bandwidth_mbps, budget_usd_per_gb,
+                    window_secs, created_at, closes_at, status, winning_peer_id, winning_price, awarded_at
+             FROM auctions WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+        )
+        .bind(status)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("sqlite list auctions")?;
+
+        Ok(rows.into_iter().map(|r| {
+            serde_json::json!({
+                "auction_id": r.0,
+                "requester_peer_id": r.1,
+                "region": r.2,
+                "bandwidth_mbps": r.3,
+                "budget_usd_per_gb": r.4,
+                "window_secs": r.5,
+                "created_at": r.6,
+                "closes_at": r.7,
+                "status": r.8,
+                "winning_peer_id": r.9,
+                "winning_price": r.10,
+                "awarded_at": r.11,
+            })
+        }).collect())
+    }
+
+    async fn update_auction_status(
+        &self,
+        auction_id: &str,
+        status: &str,
+        winning_peer_id: Option<&str>,
+        winning_price: Option<f64>,
+        awarded_at: Option<i64>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE auctions SET status = ?, winning_peer_id = ?, winning_price = ?, awarded_at = ?
+             WHERE auction_id = ?",
+        )
+        .bind(status)
+        .bind(winning_peer_id)
+        .bind(winning_price)
+        .bind(awarded_at)
+        .bind(auction_id)
+        .execute(&self.pool)
+        .await
+        .context("sqlite update auction status")?;
+        Ok(())
+    }
+
+    async fn insert_bid(
+        &self,
+        bid_id: &str,
+        auction_id: &str,
+        provider_peer_id: &str,
+        price_usd_per_gb: f64,
+        reputation_score: f64,
+        avg_latency_ms: f64,
+        submitted_at: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO auction_bids 
+             (bid_id, auction_id, provider_peer_id, price_usd_per_gb, reputation_score, 
+              avg_latency_ms, submitted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(auction_id, provider_peer_id) DO UPDATE SET
+                price_usd_per_gb = excluded.price_usd_per_gb,
+                reputation_score = excluded.reputation_score,
+                avg_latency_ms = excluded.avg_latency_ms,
+                submitted_at = excluded.submitted_at",
+        )
+        .bind(bid_id)
+        .bind(auction_id)
+        .bind(provider_peer_id)
+        .bind(price_usd_per_gb)
+        .bind(reputation_score)
+        .bind(avg_latency_ms)
+        .bind(submitted_at)
+        .execute(&self.pool)
+        .await
+        .context("sqlite insert bid")?;
+        Ok(())
+    }
+
+    async fn get_bids_for_auction(&self, auction_id: &str) -> Result<Vec<serde_json::Value>> {
+        let rows: Vec<(String, String, String, f64, f64, f64, i64)> = sqlx::query_as(
+            "SELECT bid_id, auction_id, provider_peer_id, price_usd_per_gb, 
+                    reputation_score, avg_latency_ms, submitted_at
+             FROM auction_bids WHERE auction_id = ? ORDER BY submitted_at ASC",
+        )
+        .bind(auction_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("sqlite get bids for auction")?;
+
+        Ok(rows.into_iter().map(|r| {
+            serde_json::json!({
+                "bid_id": r.0,
+                "auction_id": r.1,
+                "provider_peer_id": r.2,
+                "price_usd_per_gb": r.3,
+                "reputation_score": r.4,
+                "avg_latency_ms": r.5,
+                "submitted_at": r.6,
+            })
+        }).collect())
+    }
+
+    async fn cleanup_old_auctions(&self, older_than: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM auctions WHERE status IN ('closed', 'cancelled') AND closes_at < ?"
+        )
+        .bind(older_than)
+        .execute(&self.pool)
+        .await
+        .context("sqlite cleanup old auctions")?;
+        Ok(result.rows_affected())
+    }
 }

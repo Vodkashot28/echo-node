@@ -103,6 +103,8 @@ pub struct RelayConfig {
     pub availability: Arc<RwLock<AvailabilityEngine>>,
     pub target_addr: String,
     pub local_peer_id: String,
+    /// Node identity for session ticket signing (None = session tickets disabled)
+    pub identity: Option<Arc<crate::identity::NodeIdentity>>,
     /// Maximum upload bandwidth (Mbps) for token-bucket rate limiting.
     pub max_upload_mbps: f64,
     /// Maximum download bandwidth (Mbps) for token-bucket rate limiting.
@@ -115,6 +117,8 @@ pub struct RelayConfig {
     /// pre-handshake preamble and each Noise handshake read — a client that
     /// connects and then stalls must not hold a session permit forever.
     pub handshake_timeout_ms: u64,
+    /// Enable session ticket issuance for resumption
+    pub enable_session_tickets: bool,
 }
 
 /// Full accounting for a completed relay session, populated on the provider
@@ -481,11 +485,13 @@ impl TunnelService {
                 availability: config.availability.clone(),
                 target_addr: config.target_addr.clone(),
                 local_peer_id: config.local_peer_id.clone(),
+                identity: config.identity.clone(),
                 max_upload_mbps: config.max_upload_mbps,
                 max_download_mbps: config.max_download_mbps,
                 policy: config.policy.clone(),
                 security: config.security.clone(),
                 handshake_timeout_ms: config.handshake_timeout_ms,
+                enable_session_tickets: config.enable_session_tickets,
             };
             let sem = Arc::clone(&conn_semaphore);
             let sk = static_private_key.clone();

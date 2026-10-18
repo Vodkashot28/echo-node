@@ -85,11 +85,13 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         availability: availability.clone(),
         target_addr: echo_addr.clone(),
         local_peer_id: provider.peer_id_str().to_string(),
+        identity: None,
         max_upload_mbps: 10.0,
         max_download_mbps: 10.0,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
         handshake_timeout_ms: 10_000,
+        enable_session_tickets: false,
     };
     let (provider_svc, mut provider_events) = TunnelService::new(
         provider_peer_id,
@@ -109,11 +111,13 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         availability: provider_svc.relay_config().availability.clone(),
         target_addr: provider_svc.relay_config().target_addr.clone(),
         local_peer_id: provider_svc.relay_config().local_peer_id.clone(),
+        identity: provider_svc.relay_config().identity.clone(),
         max_upload_mbps: provider_svc.relay_config().max_upload_mbps,
         max_download_mbps: provider_svc.relay_config().max_download_mbps,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
         handshake_timeout_ms: 10_000,
+        enable_session_tickets: false,
     };
     let listener_addr = tunnel_addr.clone();
     let listener_task = tokio::spawn(async move {
@@ -137,11 +141,13 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         availability: consumer_avail.clone(),
         target_addr: "127.0.0.1:1".to_string(), // not used by this test path
         local_peer_id: consumer.peer_id_str().to_string(),
+        identity: None,
         max_upload_mbps: 0.0,
         max_download_mbps: 0.0,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
         handshake_timeout_ms: 10_000,
+        enable_session_tickets: false,
     };
     let (consumer_svc, _consumer_events) = TunnelService::new(
         consumer_peer_id,
@@ -338,11 +344,13 @@ async fn stalled_handshake_is_timed_out_and_counted() {
         availability: availability.clone(),
         target_addr: "127.0.0.1:1".to_string(), // never reached
         local_peer_id: provider.peer_id_str().to_string(),
+        identity: None,
         max_upload_mbps: 10.0,
         max_download_mbps: 10.0,
         policy: None,
         security: security.clone(),
         handshake_timeout_ms: 300,
+        enable_session_tickets: false,
     };
     let (provider_svc, _events) = TunnelService::new(
         provider_peer_id,
@@ -360,11 +368,13 @@ async fn stalled_handshake_is_timed_out_and_counted() {
         availability: provider_svc.relay_config().availability.clone(),
         target_addr: provider_svc.relay_config().target_addr.clone(),
         local_peer_id: provider_svc.relay_config().local_peer_id.clone(),
+        identity: provider_svc.relay_config().identity.clone(),
         max_upload_mbps: provider_svc.relay_config().max_upload_mbps,
         max_download_mbps: provider_svc.relay_config().max_download_mbps,
         policy: None,
         security: provider_svc.relay_config().security.clone(),
         handshake_timeout_ms: provider_svc.relay_config().handshake_timeout_ms,
+        enable_session_tickets: false,
     };
     let listener_addr = tunnel_addr.clone();
     let listener_task = tokio::spawn(async move {
@@ -458,11 +468,13 @@ async fn accountability_gate_denies_and_attributes_violation() {
         availability: availability.clone(),
         target_addr: "127.0.0.1:1".to_string(), // never reached
         local_peer_id: provider.peer_id_str().to_string(),
+        identity: None,
         max_upload_mbps: 10.0,
         max_download_mbps: 10.0,
         policy: Some(policy),
         security: security.clone(),
         handshake_timeout_ms: 10_000,
+        enable_session_tickets: false,
     };
     let (provider_svc, _events) = TunnelService::new(
         provider_peer_id,
@@ -480,11 +492,13 @@ async fn accountability_gate_denies_and_attributes_violation() {
         availability: provider_svc.relay_config().availability.clone(),
         target_addr: provider_svc.relay_config().target_addr.clone(),
         local_peer_id: provider_svc.relay_config().local_peer_id.clone(),
+        identity: provider_svc.relay_config().identity.clone(),
         max_upload_mbps: provider_svc.relay_config().max_upload_mbps,
         max_download_mbps: provider_svc.relay_config().max_download_mbps,
         policy: provider_svc.relay_config().policy.clone(),
         security: provider_svc.relay_config().security.clone(),
         handshake_timeout_ms: provider_svc.relay_config().handshake_timeout_ms,
+        enable_session_tickets: false,
     };
     let listener_addr = tunnel_addr.clone();
     let listener_task = tokio::spawn(async move {
@@ -508,11 +522,13 @@ async fn accountability_gate_denies_and_attributes_violation() {
         availability: consumer_avail.clone(),
         target_addr: "127.0.0.1:1".to_string(),
         local_peer_id: consumer.peer_id_str().to_string(),
+        identity: None,
         max_upload_mbps: 0.0,
         max_download_mbps: 0.0,
         policy: None,
         security: Arc::new(SecurityCounters::default()),
         handshake_timeout_ms: 10_000,
+        enable_session_tickets: false,
     };
     let (consumer_svc, _consumer_events) = TunnelService::new(
         consumer_peer_id,

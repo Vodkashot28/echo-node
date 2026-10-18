@@ -89,6 +89,7 @@ async fn swarm_pair(tag: &str) -> Pair {
             bootstrap: Vec::new(),
             network_id: net.clone(),
             local_only: true,
+            ..DiscoveryConfig::default()
         },
     )
     .await
@@ -102,6 +103,7 @@ async fn swarm_pair(tag: &str) -> Pair {
             bootstrap: vec![(peer_a, listen_a)],
             network_id: net,
             local_only: false,
+            ..DiscoveryConfig::default()
         },
     )
     .await

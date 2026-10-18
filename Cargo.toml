@@ -18,8 +18,8 @@ futures = "0.3"
 
 # libp2p core + transports + protocols
 libp2p = { version = "0.54", features = [
-    "tokio", "noise", "yamux", "tcp", "ping", "identify",
-    "kad", "macros", "secp256k1"
+    "tokio", "noise", "yamux", "tcp", "quic", "ping", "identify",
+    "kad", "macros", "secp256k1", "relay", "dcutr", "autonat"
 ] }
 libp2p-identity = { version = "0.2", features = ["secp256k1", "ed25519", "rand"] }
 

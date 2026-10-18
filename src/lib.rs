@@ -12,6 +12,7 @@ pub mod models;
 pub mod neon;
 pub mod policy;
 pub mod security;
+pub mod session_ticket;
 pub mod settlement;
 pub mod sqlite_store;
 pub mod telemetry;
@@ -150,4 +151,70 @@ pub trait MetricsBackend: Send + Sync {
     /// plus the genesis hash) so the ledger writer can resume the chain
     /// after a restart. `None` when the node has no events yet.
     async fn load_ledger_chain_state(&self, node_id: &str) -> Result<Option<LedgerChainState>>;
+
+    /// Store a session ticket for resumption (provider side)
+    async fn store_session_ticket(
+        &self,
+        session_id: &str,
+        consumer_peer_id: &str,
+        ticket_data: &[u8],
+        expires_at: i64,
+    ) -> Result<()>;
+
+    /// Retrieve a session ticket by session_id (provider side)
+    async fn get_session_ticket(&self, session_id: &str) -> Result<Option<Vec<u8>>>;
+
+    /// Delete expired session tickets (cleanup task)
+    async fn cleanup_expired_tickets(&self) -> Result<u64>;
+
+    // Auction persistence methods
+    /// Save or update an auction
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_auction(
+        &self,
+        auction_id: &str,
+        requester_peer_id: &str,
+        region: &str,
+        bandwidth_mbps: f64,
+        budget_usd_per_gb: f64,
+        window_secs: i64,
+        created_at: i64,
+        closes_at: i64,
+        status: &str,
+    ) -> Result<()>;
+
+    /// Get an auction by ID
+    async fn get_auction(&self, auction_id: &str) -> Result<Option<serde_json::Value>>;
+
+    /// List all auctions matching a status
+    async fn list_auctions(&self, status: &str, limit: i64) -> Result<Vec<serde_json::Value>>;
+
+    /// Update auction status (open -> closed/cancelled)
+    async fn update_auction_status(
+        &self,
+        auction_id: &str,
+        status: &str,
+        winning_peer_id: Option<&str>,
+        winning_price: Option<f64>,
+        awarded_at: Option<i64>,
+    ) -> Result<()>;
+
+    /// Store a bid for an auction
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_bid(
+        &self,
+        bid_id: &str,
+        auction_id: &str,
+        provider_peer_id: &str,
+        price_usd_per_gb: f64,
+        reputation_score: f64,
+        avg_latency_ms: f64,
+        submitted_at: i64,
+    ) -> Result<()>;
+
+    /// Get all bids for an auction
+    async fn get_bids_for_auction(&self, auction_id: &str) -> Result<Vec<serde_json::Value>>;
+
+    /// Delete auctions older than specified timestamp (cleanup)
+    async fn cleanup_old_auctions(&self, older_than: i64) -> Result<u64>;
 }

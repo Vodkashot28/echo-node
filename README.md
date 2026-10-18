@@ -536,10 +536,8 @@ See `GAPS.md` for the full integration status.
 | `PROVIDER_ADDR` | (unset) | Provider's `TUNNEL_ADDR` — required in consumer mode |
 | `PROVIDER_PEER_ID` | (unset) | Provider's libp2p PeerId — required in consumer mode |
 | `PROVIDER_NOISE_PUBKEY` | (unset) | Provider's base64 X25519 Noise key for handshake pinning — required in consumer mode |
-| `DASHBOARD_TELEMETRY_URL` | (unset) | Dashboard telemetry ingestion endpoint (e.g. `https://<project>.supabase.co/functions/v1/report-telemetry`). With `TOKEN` + `USER_ID`, enables the heartbeat → dashboard push (see `GAPS.md`) |
-| `DASHBOARD_TELEMETRY_TOKEN` | (unset) | Shared secret, sent as `Authorization: Bearer` — must equal the `DASHBOARD_TELEMETRY_TOKEN` function secret |
-| `DASHBOARD_USER_ID` | (unset) | Supabase auth user UUID that owns this node (binds rows for RLS) |
-| `DASHBOARD_NODE_ID` | (auto UUID) | Stable UUID for this node's dashboard `nodes` row; generated v4 at startup if unset (changes across restarts) |
+| `DASHBOARD_TELEMETRY_URL` | (unset) | Dashboard telemetry ingestion endpoint (e.g. `https://<project>.supabase.co/functions/v1/report-telemetry`). With `ECHO_API_KEY`, enables the heartbeat → dashboard push (see `GAPS.md`) |
+| `ECHO_API_KEY` | (unset) | API key for the dashboard telemetry bridge, sent as `Authorization: Bearer <key>` — required alongside `DASHBOARD_TELEMETRY_URL` to enable the bridge |
 | `DASHBOARD_TELEMETRY_SPOOL` | `data/telemetry_spool.jsonl` | Durable spool for frames that outlive a failed run; replayed on next boot |
 | `DASHBOARD_TELEMETRY_MAX_QUEUE` | `256` | In-memory frame queue cap (overflow drops oldest) |
 | `DASHBOARD_TELEMETRY_BACKOFF_BASE_MS` | `500` | First retry delay after a failed dashboard push |
@@ -579,7 +577,7 @@ listener instead (task 9).
 | # | Task | Line | Description |
 |---|------|------|-------------|
 | — | **Ledger writer** | 1608 (both modes) | `ledger.rs` — drains `LedgerWriter::try_emit` drafts in strict FIFO, advances the per-node sequence/prev-hash chain, signs + persists `ledger_events` (spawned before every other task) |
-| — | **Dashboard Reporter** | 1812 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL/TOKEN/USER_ID` are set |
+| — | **Dashboard Reporter** | 1812 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL` + `ECHO_API_KEY` are set |
 | — | **Public IP detection** | 2158 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
 | — | **Auction sweeper** | 1714 | Every 2 s: finalizes expired auctions (Vickrey award or clean expiry) — the `bidding.rs` deadline sweep; emits `AuctionAwarded` to the ledger |
 | 1 | **Tunnel Event Handler** | 1827 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service; emits `TunnelEstablished`/`TunnelTerminated` + `ReputationChanged` |

@@ -11,17 +11,17 @@
 //! This is the daemon side of the daemon → dashboard ingestion path. It is
 //! fully opt-in and off by default:
 //!
-//! - `DASHBOARD_TELEMETRY_URL`   — edge function URL
+//! - `DASHBOARD_TELEMETRY_URL` — edge function URL
 //!   (e.g. `https://<project>.supabase.co/functions/v1/report-telemetry`)
-//! - `DASHBOARD_TELEMETRY_TOKEN` — shared secret, sent as `Authorization: Bearer`
-//! - `DASHBOARD_USER_ID`         — Supabase auth user UUID that owns this node
-//! - `DASHBOARD_NODE_ID`         — optional stable UUID identifying this node's
-//!   dashboard row; generated (v4) at startup when omitted
+//! - `ECHO_API_KEY`            — API key sent as `Authorization: Bearer <key>`
 //!
-//! When any required variable is missing the bridge stays disabled and the
+//! When either required variable is missing the bridge stays disabled and the
 //! daemon behaves exactly as before. Reporting never blocks the heartbeat:
 //! frames are handed off through a small bounded channel and posted by a
 //! dedicated background task.
+//!
+//! Every payload includes the node's `peer_id` (libp2p PeerId string) so the
+//! dashboard can correlate rows without a separate `node_id`/`user_id` pair.
 //!
 //! Delivery is queue-backed and durable:
 //!
@@ -39,6 +39,7 @@
 use crate::tunnel::SessionCloseDetails;
 use crate::{NetworkMetricsRow, NodeIntelligenceRow, NodeMetricsRow, NodeRow};
 use anyhow::{Context, Result};
+#[cfg(test)]
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -68,12 +69,8 @@ const SHUTDOWN_FLUSH_SECS: u64 = 5;
 #[derive(Debug, Clone)]
 pub struct DashboardConfig {
     pub url: String,
-    pub token: String,
-    /// Supabase auth user UUID that owns this node (feed the edge function
-    /// the `nodes.user_id` / RLS binding it needs).
-    pub user_id: String,
-    /// UUID identifying this node's dashboard row.
-    pub node_id: String,
+    /// API key sent as `Authorization: Bearer <api_key>`.
+    pub api_key: String,
     /// JSONL spool file for crash/restart durability.
     pub spool_path: PathBuf,
     /// Exponential backoff base (first retry delay), milliseconds.
@@ -85,31 +82,17 @@ pub struct DashboardConfig {
 }
 
 impl DashboardConfig {
-    /// Read the `DASHBOARD_*` env vars. Returns `None` when the bridge is
-    /// disabled (any of the required variables unset/empty).
+    /// Read the `DASHBOARD_TELEMETRY_URL` and `ECHO_API_KEY` env vars.
+    /// Returns `None` when the bridge is disabled (either var unset/empty).
     pub fn from_env() -> Option<Self> {
         let url = std::env::var("DASHBOARD_TELEMETRY_URL")
             .ok()
             .filter(|v| !v.is_empty());
-        let token = std::env::var("DASHBOARD_TELEMETRY_TOKEN")
+        let api_key = std::env::var("ECHO_API_KEY")
             .ok()
             .filter(|v| !v.is_empty());
-        let user_id = std::env::var("DASHBOARD_USER_ID")
-            .ok()
-            .filter(|v| !v.is_empty());
-        match (url, token, user_id) {
-            (Some(url), Some(token), Some(user_id)) => {
-                let node_id = std::env::var("DASHBOARD_NODE_ID")
-                    .ok()
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or_else(|| {
-                        let generated = uuid_v4();
-                        warn!(
-                            node_id = %generated,
-                            "DASHBOARD_NODE_ID not set; using generated id (changes across restarts; set it to reuse the same dashboard node row)"
-                        );
-                        generated
-                    });
+        match (url, api_key) {
+            (Some(url), Some(api_key)) => {
                 let spool_path = std::env::var("DASHBOARD_TELEMETRY_SPOOL")
                     .ok()
                     .filter(|v| !v.is_empty())
@@ -121,9 +104,7 @@ impl DashboardConfig {
                 let max_queue = env_usize("DASHBOARD_TELEMETRY_MAX_QUEUE", 256).max(1);
                 Some(Self {
                     url,
-                    token,
-                    user_id,
-                    node_id,
+                    api_key,
                     spool_path,
                     backoff_base_ms,
                     backoff_max_ms,
@@ -142,10 +123,8 @@ pub struct DashboardTelemetry {
     pub version: u32,
     /// Frame timestamp (RFC3339).
     pub timestamp: String,
-    /// Weather the `nodes.row` UUID this frame belongs to (dashboard schema).
-    pub node_id: String,
-    /// Dashboard user UUID this node is attributed to.
-    pub user_id: String,
+    /// The node's libp2p PeerId — used by the dashboard to correlate rows.
+    pub peer_id: String,
     pub node: NodeRow,
     pub node_metrics: NodeMetricsRow,
     pub network_metrics: NetworkMetricsRow,
@@ -167,10 +146,8 @@ pub struct SessionEvent {
     pub version: u32,
     /// Event timestamp (RFC3339) — the session ended_at.
     pub timestamp: String,
-    /// Dashboard `nodes.id` UUID this session belongs to.
-    pub node_id: String,
-    /// Dashboard user UUID this session is attributed to.
-    pub user_id: String,
+    /// The node's libp2p PeerId — used by the dashboard to correlate rows.
+    pub peer_id: String,
     /// Daemon-side tunnel session id (`connection_history` counterpart).
     pub session_id: String,
     pub remote_peer_id: String,
@@ -201,8 +178,7 @@ pub struct SessionEvent {
 impl SessionEvent {
     /// Build a session-close frame from a provider-side relay teardown.
     pub fn from_close(
-        node_id: &str,
-        user_id: &str,
+        peer_id: &str,
         session_id: &str,
         bytes_sent: u64,
         bytes_received: u64,
@@ -216,8 +192,7 @@ impl SessionEvent {
             action: "closed",
             version: TELEMETRY_SCHEMA_VERSION,
             timestamp: details.ended_at.clone(),
-            node_id: node_id.to_string(),
-            user_id: user_id.to_string(),
+            peer_id: peer_id.to_string(),
             session_id: session_id.to_string(),
             remote_peer_id: details.remote_peer_id.clone(),
             remote_ip: details.remote_ip.clone(),
@@ -499,7 +474,6 @@ fn clear_spool(path: &Path) {
 /// Sender half of the telemetry bridge. Clonable; one instance per daemon.
 #[derive(Debug, Clone)]
 pub struct DashboardReporter {
-    config: DashboardConfig,
     tx: mpsc::Sender<ReporterMessage>,
     shutdown_tx: watch::Sender<bool>,
 }
@@ -581,7 +555,7 @@ impl DashboardReporter {
                     let Some(head) = queue.front().cloned() else {
                         break;
                     };
-                    match post_payload(&client, &task_config.url, &task_config.token, &head.payload).await
+                    match post_payload(&client, &task_config.url, &task_config.api_key, &head.payload).await
                     {
                         Ok(()) => {
                             queue.pop_front();
@@ -615,7 +589,6 @@ impl DashboardReporter {
             }
         });
         Self {
-            config,
             tx,
             shutdown_tx,
         }
@@ -652,13 +625,7 @@ impl DashboardReporter {
         }
     }
 
-    pub fn node_id(&self) -> &str {
-        &self.config.node_id
-    }
 
-    pub fn user_id(&self) -> &str {
-        &self.config.user_id
-    }
 }
 
 /// Final delivery attempt on shutdown: keep posting until the queue is
@@ -677,7 +644,7 @@ async fn flush_remaining(
         }
         match tokio::time::timeout(
             remaining,
-            post_payload(client, &config.url, &config.token, &head.payload),
+            post_payload(client, &config.url, &config.api_key, &head.payload),
         )
         .await
         {
@@ -714,12 +681,12 @@ fn env_usize(key: &str, default: usize) -> usize {
 async fn post_payload<T: Serialize>(
     client: &reqwest::Client,
     url: &str,
-    token: &str,
+    api_key: &str,
     payload: &T,
 ) -> Result<()> {
     let resp = client
         .post(url)
-        .bearer_auth(token)
+        .header("Authorization", format!("Bearer {api_key}"))
         .json(payload)
         .send()
         .await
@@ -736,6 +703,7 @@ async fn post_payload<T: Serialize>(
 }
 
 /// Generate a random RFC 4122 version-4 UUID without the `uuid` crate.
+#[cfg(test)]
 fn uuid_v4() -> String {
     let mut bytes = [0u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
@@ -842,8 +810,7 @@ mod tests {
             exit_reason: "completed".to_string(),
         };
         let event = SessionEvent::from_close(
-            "11111111-1111-4111-8111-111111111111",
-            "22222222-2222-4222-8222-222222222222",
+            "12D3KooWprovider",
             "tun_123",
             1_000_000_000, // 1 GB sent
             1_000_000_000, // 1 GB received
@@ -856,6 +823,7 @@ mod tests {
         assert_eq!(event.session_type, "tunnel");
         assert_eq!(event.protocol, "tcp");
         assert_eq!(event.bytes_relayed, 2_000_000_000);
+        assert_eq!(event.peer_id, "12D3KooWprovider");
         assert_eq!(event.remote_peer_id, "12D3KooWabc");
         assert_eq!(event.remote_ip.as_deref(), Some("1.2.3.4"));
         assert_eq!(event.remote_port, Some(52311));
@@ -870,8 +838,12 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["kind"], "session");
         assert_eq!(json["session_id"], "tun_123");
+        assert_eq!(json["peer_id"], "12D3KooWprovider");
         assert_eq!(json["exit_reason"], "completed");
         assert_eq!(json["remote_ip"], "1.2.3.4");
+        // node_id and user_id must not appear in the payload.
+        assert!(json.get("node_id").is_none(), "node_id must not be present");
+        assert!(json.get("user_id").is_none(), "user_id must not be present");
     }
 
     #[test]
@@ -945,8 +917,7 @@ mod tests {
             exit_reason: "completed".to_string(),
         };
         let event = SessionEvent::from_close(
-            "node",
-            "user",
+            "12D3KooWprovider",
             "tun_1",
             10,
             20,
@@ -956,7 +927,10 @@ mod tests {
         let record = SpoolRecord::from(ReporterMessage::Session(Box::new(event)));
         assert_eq!(record.kind, "session");
         assert_eq!(record.payload["session_id"], "tun_1");
+        assert_eq!(record.payload["peer_id"], "12D3KooWprovider");
         assert_eq!(record.payload["bytes_relayed"], 30);
+        assert!(record.payload.get("node_id").is_none());
+        assert!(record.payload.get("user_id").is_none());
     }
 
     #[test]
@@ -1004,9 +978,7 @@ mod tests {
         // Consolidated (env is process-global; tests run in parallel).
         for key in [
             "DASHBOARD_TELEMETRY_URL",
-            "DASHBOARD_TELEMETRY_TOKEN",
-            "DASHBOARD_USER_ID",
-            "DASHBOARD_NODE_ID",
+            "ECHO_API_KEY",
         ] {
             std::env::remove_var(key);
         }
@@ -1017,14 +989,13 @@ mod tests {
         assert!(DashboardConfig::from_env().is_none());
 
         std::env::set_var("DASHBOARD_TELEMETRY_URL", "https://example.test/ingest");
-        std::env::set_var("DASHBOARD_TELEMETRY_TOKEN", "tok");
-        std::env::set_var("DASHBOARD_USER_ID", "user-1");
-        std::env::set_var("DASHBOARD_NODE_ID", "node-1");
+        std::env::set_var("ECHO_API_KEY", "eak_test_key");
         std::env::set_var("DASHBOARD_TELEMETRY_SPOOL", "/tmp/x/spool.jsonl");
         std::env::set_var("DASHBOARD_TELEMETRY_BACKOFF_BASE_MS", "250");
         std::env::set_var("DASHBOARD_TELEMETRY_BACKOFF_MAX_MS", "9000");
         std::env::set_var("DASHBOARD_TELEMETRY_MAX_QUEUE", "32");
         let cfg = DashboardConfig::from_env().unwrap();
+        assert_eq!(cfg.api_key, "eak_test_key");
         assert_eq!(cfg.spool_path, PathBuf::from("/tmp/x/spool.jsonl"));
         assert_eq!(cfg.backoff_base_ms, 250);
         assert_eq!(cfg.backoff_max_ms, 9000);
@@ -1043,9 +1014,7 @@ mod tests {
 
         for key in [
             "DASHBOARD_TELEMETRY_URL",
-            "DASHBOARD_TELEMETRY_TOKEN",
-            "DASHBOARD_USER_ID",
-            "DASHBOARD_NODE_ID",
+            "ECHO_API_KEY",
         ] {
             std::env::remove_var(key);
         }

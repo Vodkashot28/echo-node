@@ -37,6 +37,11 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "add_ledger_events",
             sql: include_str!("../migrations/postgres/005_ledger_events.sql"),
         },
+        Migration {
+            version: 6,
+            name: "session_tickets_and_auctions",
+            sql: include_str!("../migrations/postgres/006_session_tickets_and_auctions.sql"),
+        },
     ]
 }
 
@@ -67,6 +72,11 @@ pub fn sqlite_migrations() -> Vec<Migration> {
             version: 5,
             name: "add_ledger_events",
             sql: include_str!("../migrations/sqlite/005_ledger_events.sql"),
+        },
+        Migration {
+            version: 6,
+            name: "session_tickets_and_auctions",
+            sql: include_str!("../migrations/sqlite/006_session_tickets_and_auctions.sql"),
         },
     ]
 }

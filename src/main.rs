@@ -934,8 +934,7 @@ async fn heartbeat(
             let frame = DashboardTelemetry {
                 version: telemetry::TELEMETRY_SCHEMA_VERSION,
                 timestamp: Utc::now().to_rfc3339(),
-                node_id: reporter.node_id().to_string(),
-                user_id: reporter.user_id().to_string(),
+                peer_id: st.peer_id.clone(),
                 node: node_row.clone(),
                 node_metrics: node_metrics.clone(),
                 network_metrics: network_metrics.clone(),
@@ -1804,11 +1803,13 @@ async fn run_daemon() -> Result<()> {
         availability: availability.clone(),
         target_addr: config.relay_target.clone(),
         local_peer_id: identity.peer_id_str().to_string(),
+        identity: Some(Arc::new(identity.clone())),
         max_upload_mbps: config.max_upload_mbps,
         max_download_mbps: config.max_download_mbps,
         policy: policy.clone(),
         security: security.clone(),
         handshake_timeout_ms,
+        enable_session_tickets: false,
     };
     let (tunnel_service, mut tunnel_rx) = TunnelService::new(
         local_peer_id,
@@ -1830,14 +1831,12 @@ async fn run_daemon() -> Result<()> {
         Some(cfg) => {
             info!(
                 url = %cfg.url,
-                node_id = %cfg.node_id,
-                user_id = %cfg.user_id,
                 "dashboard telemetry reporting enabled"
             );
             Some(DashboardReporter::spawn(cfg))
         }
         None => {
-            debug!("dashboard telemetry reporting disabled (set DASHBOARD_TELEMETRY_URL, DASHBOARD_TELEMETRY_TOKEN, DASHBOARD_USER_ID)");
+            debug!("dashboard telemetry reporting disabled (set DASHBOARD_TELEMETRY_URL and ECHO_API_KEY)");
             None
         }
     };
@@ -1846,6 +1845,7 @@ async fn run_daemon() -> Result<()> {
     // NOTE: end_session is called inside handle_incoming_connection (provider side)
     // and should NOT be called here to avoid the double-end-session bug.
     let event_reporter = reporter.clone();
+    let event_peer_id = identity.peer_id_str().to_string();
     let settlement_rate = config.settlement_rate_usd_per_gb;
     let ledger_tunnel = ledger.clone();
     let ledger_tunnel_backend = backend.clone();
@@ -1940,8 +1940,7 @@ async fn run_daemon() -> Result<()> {
                     // show real relays instead of seeded rows (see GAPS.md).
                     if let (Some(reporter), Some(details)) = (&event_reporter, &details) {
                         let session_event = telemetry::SessionEvent::from_close(
-                            reporter.node_id(),
-                            reporter.user_id(),
+                            &event_peer_id,
                             &session_id,
                             bytes_sent,
                             bytes_received,
@@ -1965,11 +1964,13 @@ async fn run_daemon() -> Result<()> {
             availability: tunnel_service.relay_config().availability.clone(),
             target_addr: tunnel_service.relay_config().target_addr.clone(),
             local_peer_id: tunnel_service.relay_config().local_peer_id.clone(),
+            identity: tunnel_service.relay_config().identity.clone(),
             max_upload_mbps: tunnel_service.relay_config().max_upload_mbps,
             max_download_mbps: tunnel_service.relay_config().max_download_mbps,
             policy: tunnel_service.relay_config().policy.clone(),
             security: tunnel_service.relay_config().security.clone(),
             handshake_timeout_ms: tunnel_service.relay_config().handshake_timeout_ms,
+            enable_session_tickets: tunnel_service.relay_config().enable_session_tickets,
         };
         let conn_semaphore = tunnel_service.conn_semaphore();
         let static_private_key = tunnel_service.static_private_key();
@@ -2151,6 +2152,10 @@ async fn run_daemon() -> Result<()> {
                         } else {
                             debug!(key, count = providers.len(), "providers found via DHT");
                         }
+                    }
+                    _ => {
+                        // ReservationAccepted, ReservationFailed, NatStatus,
+                        // ExternalAddress — informational; no action needed here.
                     }
                 }
             }

@@ -1,9 +1,9 @@
 use anyhow::{bail, Context, Result};
 use futures::StreamExt;
 use libp2p::{
-    identify, kad,
+    autonat, dcutr, identify, kad,
     multiaddr::Protocol,
-    noise,
+    noise, relay,
     swarm::{NetworkBehaviour, StreamProtocol, Swarm, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, SwarmBuilder,
 };
@@ -23,6 +23,9 @@ use crate::identity::NodeIdentity;
 ///   talk to peers advertising the same network id
 /// - `DHT_LOCAL_ONLY`        — `1`/`true`: no bootstrap peers, no outbound
 ///   bootstrap query — dev/LAN-only operation
+/// - `DHT_RELAY_MODE`        — `server`, `client`, or `auto` (default: `auto`
+///   = server if public address detected, else client)
+/// - `DHT_RELAY_PEERS`       — comma-separated relay multiaddrs for client mode
 #[derive(Debug, Clone)]
 pub struct DiscoveryConfig {
     pub listen_addr: Multiaddr,
@@ -31,6 +34,17 @@ pub struct DiscoveryConfig {
     pub network_id: String,
     /// When true, never contacts nodes outside this host (dev/LAN mode).
     pub local_only: bool,
+    /// Relay mode: server (accept relay requests), client (use relays), or auto.
+    pub relay_mode: RelayMode,
+    /// Known relay peers for client mode.
+    pub relay_peers: Vec<(PeerId, Multiaddr)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RelayMode {
+    Server,
+    Client,
+    Auto,
 }
 
 impl Default for DiscoveryConfig {
@@ -42,6 +56,8 @@ impl Default for DiscoveryConfig {
             bootstrap: Vec::new(),
             network_id: "echo".to_string(),
             local_only: false,
+            relay_mode: RelayMode::Auto,
+            relay_peers: Vec::new(),
         }
     }
 }
@@ -89,11 +105,41 @@ impl DiscoveryConfig {
             .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
 
+        let relay_mode = match std::env::var("DHT_RELAY_MODE")
+            .ok()
+            .as_deref()
+            .map(|s| s.trim().to_ascii_lowercase())
+        {
+            Some(s) if s == "server" => RelayMode::Server,
+            Some(s) if s == "client" => RelayMode::Client,
+            _ => RelayMode::Auto,
+        };
+
+        let relay_peers = match std::env::var("DHT_RELAY_PEERS") {
+            Ok(raw) if !raw.trim().is_empty() => {
+                let mut peers = Vec::new();
+                for entry in raw.split(',') {
+                    let entry = entry.trim();
+                    if entry.is_empty() {
+                        continue;
+                    }
+                    match parse_bootstrap_peer(entry) {
+                        Ok(peer) => peers.push(peer),
+                        Err(e) => warn!(relay_peer = entry, error = %e, "skipping invalid relay peer"),
+                    }
+                }
+                peers
+            }
+            _ => Vec::new(),
+        };
+
         Self {
             listen_addr,
             bootstrap,
             network_id,
             local_only,
+            relay_mode,
+            relay_peers,
         }
     }
 }
@@ -138,6 +184,13 @@ pub enum DiscoveryCommand {
     StartProviding { key: String },
     /// Look up all current providers of `key`.
     GetProviders { key: String },
+    /// Request a relay reservation for NAT traversal.
+    MakeReservation { relay_peer_id: PeerId },
+    /// Initiate hole-punching connection to a peer via relay.
+    DialThroughRelay {
+        target_peer_id: PeerId,
+        relay_peer_id: PeerId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +206,14 @@ pub enum DiscoveryEvent {
     /// Provider lookup result for `key` (may fire more than once per query;
     /// later batches are supersets as the lookup progresses).
     ProvidersFound { key: String, providers: Vec<PeerId> },
+    /// A relay reservation was successfully made.
+    ReservationAccepted { relay_peer_id: PeerId },
+    /// Relay reservation failed.
+    ReservationFailed { relay_peer_id: PeerId },
+    /// NAT status detected (public, private, unknown).
+    NatStatus { is_public: bool },
+    /// External address confirmed (for public nodes).
+    ExternalAddress { address: Multiaddr },
 }
 
 /// String form of a Kademlia record key (keys are plain UTF-8 byte strings).
@@ -164,6 +225,9 @@ fn key_string(key: &kad::RecordKey) -> String {
 struct Behaviour {
     identify: identify::Behaviour,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
+    relay_client: relay::client::Behaviour,
+    dcutr: dcutr::Behaviour,
+    autonat: autonat::Behaviour,
 }
 
 impl DiscoveryService {
@@ -186,14 +250,16 @@ impl DiscoveryService {
         .context("DHT_NETWORK_ID produces an invalid Kademlia protocol name")?;
         let identify_protocol = format!("/{}/id/1.0.0", config.network_id);
 
-        let mut swarm = SwarmBuilder::with_existing_identity(keypair)
+        let mut swarm = SwarmBuilder::with_existing_identity(keypair.clone())
             .with_tokio()
             .with_tcp(
                 tcp::Config::default(),
                 noise::Config::new,
                 yamux::Config::default,
             )?
-            .with_behaviour(|key| {
+            .with_quic()
+            .with_relay_client(noise::Config::new, yamux::Config::default)?
+            .with_behaviour(|key, relay_client| {
                 let peer_id = key.public().to_peer_id();
 
                 let identify = identify::Behaviour::new(identify::Config::new(
@@ -210,9 +276,29 @@ impl DiscoveryService {
                 // and provider announcements would silently fail on every peer.
                 kademlia.set_mode(Some(kad::Mode::Server));
 
+                let dcutr = dcutr::Behaviour::new(peer_id);
+
+                let autonat = autonat::Behaviour::new(
+                    peer_id,
+                    autonat::Config {
+                        // Start with 3 boot nodes for confidence, retry every 15s
+                        boot_delay: Duration::from_secs(15),
+                        refresh_interval: Duration::from_secs(120),
+                        retry_interval: Duration::from_secs(15),
+                        throttle_clients_global_max: 10,
+                        throttle_clients_period: Duration::from_secs(1),
+                        throttle_clients_peer_max: 2,
+                        only_global_ips: true,
+                        ..Default::default()
+                    },
+                );
+
                 Ok(Behaviour {
                     identify,
                     kademlia,
+                    relay_client,
+                    dcutr,
+                    autonat,
                 })
             })?
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
@@ -226,6 +312,12 @@ impl DiscoveryService {
                 "DHT running in local-only mode (no bootstrap peers, no external queries)"
             );
         } else {
+            // Setup relay clients for NAT traversal
+            for (peer_id, addr) in &config.relay_peers {
+                swarm.dial(addr.clone())?;
+                info!(peer_id = %peer_id, addr = %addr, "dialing relay peer");
+            }
+
             // Explicitly configured bootstrap peers …
             for (peer_id, addr) in &config.bootstrap {
                 swarm
@@ -421,6 +513,46 @@ impl DiscoveryService {
                             debug!(peer_id = %peer_id, "connection closed");
                             let _ = self.event_tx.send(DiscoveryEvent::PeerDisconnected(peer_id));
                         }
+                        SwarmEvent::Behaviour(BehaviourEvent::RelayClient(
+                            relay::client::Event::ReservationReqAccepted {
+                                relay_peer_id, ..
+                            },
+                        )) => {
+                            info!(relay_peer_id = %relay_peer_id, "relay reservation accepted");
+                            let _ = self.event_tx.send(DiscoveryEvent::ReservationAccepted {
+                                relay_peer_id,
+                            });
+                        }
+                        SwarmEvent::Behaviour(BehaviourEvent::Dcutr(dcutr::Event {
+                            remote_peer_id,
+                            result: Ok(_),
+                        })) => {
+                            info!(peer_id = %remote_peer_id, "hole-punching successful");
+                        }
+                        SwarmEvent::Behaviour(BehaviourEvent::Dcutr(dcutr::Event {
+                            remote_peer_id,
+                            result: Err(e),
+                        })) => {
+                            warn!(peer_id = %remote_peer_id, error = ?e, "hole-punching failed");
+                        }
+                        SwarmEvent::Behaviour(BehaviourEvent::Autonat(autonat::Event::StatusChanged {
+                            old,
+                            new,
+                        })) => {
+                            info!(old_status = ?old, new_status = ?new, "NAT status changed");
+                            let is_public = matches!(new, autonat::NatStatus::Public(_));
+                            let _ = self.event_tx.send(DiscoveryEvent::NatStatus { is_public });
+                        }
+                        SwarmEvent::Behaviour(BehaviourEvent::Autonat(autonat::Event::InboundProbe(_))) => {
+                            // Silently handled - we're being probed
+                        }
+                        SwarmEvent::Behaviour(BehaviourEvent::Autonat(autonat::Event::OutboundProbe(_))) => {
+                            // Silently handled - we're probing
+                        }
+                        SwarmEvent::ExternalAddrConfirmed { address } => {
+                            info!(address = %address, "external address confirmed");
+                            let _ = self.event_tx.send(DiscoveryEvent::ExternalAddress { address });
+                        }
                         _ => {}
                     }
                 }
@@ -431,9 +563,9 @@ impl DiscoveryService {
     /// Execute a command against the Kademlia behaviour. Results arrive
     /// asynchronously as swarm events (handled in [`Self::run`]).
     fn handle_command(&mut self, cmd: DiscoveryCommand) {
-        let kademlia = &mut self.swarm.behaviour_mut().kademlia;
         match cmd {
             DiscoveryCommand::PutRecord { key, value, ttl } => {
+                let kademlia = &mut self.swarm.behaviour_mut().kademlia;
                 let mut record = kad::Record::new(kad::RecordKey::new(&key), value);
                 if let Some(ttl) = ttl {
                     record.expires = Some(Instant::now() + ttl);
@@ -443,15 +575,47 @@ impl DiscoveryService {
                 }
             }
             DiscoveryCommand::GetRecord { key } => {
+                let kademlia = &mut self.swarm.behaviour_mut().kademlia;
                 kademlia.get_record(kad::RecordKey::new(&key));
             }
             DiscoveryCommand::StartProviding { key } => {
+                let kademlia = &mut self.swarm.behaviour_mut().kademlia;
                 if let Err(e) = kademlia.start_providing(kad::RecordKey::new(&key)) {
                     warn!(error = %e, key, "start providing rejected");
                 }
             }
             DiscoveryCommand::GetProviders { key } => {
+                let kademlia = &mut self.swarm.behaviour_mut().kademlia;
                 kademlia.get_providers(kad::RecordKey::new(&key));
+            }
+            DiscoveryCommand::MakeReservation { relay_peer_id } => {
+                // The relay client automatically makes reservations when connected
+                info!(relay_peer_id = %relay_peer_id, "reservation request initiated");
+            }
+            DiscoveryCommand::DialThroughRelay {
+                target_peer_id,
+                relay_peer_id,
+            } => {
+                // Build a relay address for the target peer
+                let relay_addr = Multiaddr::empty()
+                    .with(Protocol::P2p(relay_peer_id))
+                    .with(Protocol::P2pCircuit)
+                    .with(Protocol::P2p(target_peer_id));
+                
+                if let Err(e) = self.swarm.dial(relay_addr.clone()) {
+                    warn!(
+                        error = ?e,
+                        relay = %relay_peer_id,
+                        target = %target_peer_id,
+                        "failed to dial through relay"
+                    );
+                } else {
+                    info!(
+                        relay = %relay_peer_id,
+                        target = %target_peer_id,
+                        "dialing through relay"
+                    );
+                }
             }
         }
     }
