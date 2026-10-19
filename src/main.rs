@@ -1900,7 +1900,7 @@ async fn run_daemon() -> Result<()> {
         policy: policy.clone(),
         security: security.clone(),
         handshake_timeout_ms,
-        enable_session_tickets: false,
+        enable_session_tickets: true,
     };
     let (tunnel_service, mut tunnel_rx) = TunnelService::new(
         local_peer_id,

@@ -12,9 +12,13 @@ use crate::availability::AvailabilityEngine;
 use crate::meter::{MeteringEngine, TokenBucket};
 use crate::policy::{PeerFacts, PolicyEngine, PolicyPermit, PolicyViolation};
 use crate::security::SecurityCounters;
+use crate::session_ticket::{SessionState, SessionTicket};
 use crate::{ConnectionRecord, MetricsBackend, PeerReputation};
 
 use crate::NOISE_PARAMS;
+
+/// Directory (relative to CWD) where the consumer persists received tickets.
+const TICKET_STORE_DIR: &str = "data/tickets";
 
 /// Domain-separated prologue prefix for Noise_XX handshakes.
 /// Prologue = "EchoMesh|v1|<session_id>"
@@ -258,8 +262,10 @@ impl TunnelService {
                 .context("failed to connect to provider")?
         };
 
-        // 3. Send session_id + local peer_id (plaintext, before Noise handshake)
-        send_session_id(&mut stream, session_id, &self.local_peer_id.to_string()).await?;
+        // 3. Send session_id + local peer_id + optional ticket (plaintext, before Noise handshake).
+        // Load a previously-received ticket for this provider from disk (if any).
+        let stored_ticket = load_ticket_from_disk(&remote_peer_id.to_string());
+        send_preamble(&mut stream, session_id, &self.local_peer_id.to_string(), stored_ticket.as_deref()).await?;
 
         // 4. Construct domain-separated prologue: "EchoMesh|v1|<session_id>"
         let mut prologue = Vec::from(PROTOCOL_PROLOGUE_PREFIX);
@@ -345,29 +351,57 @@ impl TunnelService {
             }
         }
 
-        // 7. Register with metering engine
-        self.metering
-            .start_session(session_id, &remote_peer_id.to_string())
-            .await;
-        self.active_sessions
-            .write()
-            .await
-            .insert(session_id.to_string(), ());
+        // 6.6 Receive provider's ticket signal frame (first encrypted frame after handshake).
+        // The provider always sends one encrypted frame:
+        //   [0x01, <ticket bytes>] — ticket enclosed, persist it for future reconnects
+        //   [0x00]                 — no ticket (tickets disabled on provider)
+        {
+            let transport_arc = Arc::new(tokio::sync::Mutex::new(transport));
+            let ticket_result = handshake_read(
+                self.relay_config.handshake_timeout_ms,
+                "ticket signal frame",
+                recv_encrypted_frame(&mut stream, transport_arc.clone()),
+            ).await;
+            match ticket_result {
+                Ok(frame) if !frame.is_empty() && frame[0] == 0x01 => {
+                    let ticket_bytes = &frame[1..];
+                    if !ticket_bytes.is_empty() {
+                        persist_ticket_to_disk(&remote_peer_id.to_string(), ticket_bytes);
+                        info!(session = session_id, "session ticket received and stored");
+                    }
+                }
+                Ok(_) => {
+                    debug!(session = session_id, "provider sent no-ticket signal (tickets disabled)");
+                }
+                Err(e) => {
+                    warn!(session = session_id, error = %e, "failed to read ticket signal frame (non-fatal)");
+                }
+            }
 
-        let _ = self.event_tx.send(TunnelEvent::SessionEstablished {
-            session_id: session_id.to_string(),
-            remote_peer_id,
-        });
+            // 7. Register with metering engine
+            self.metering
+                .start_session(session_id, &remote_peer_id.to_string())
+                .await;
+            self.active_sessions
+                .write()
+                .await
+                .insert(session_id.to_string(), ());
 
-        info!(session = session_id, "encrypted tunnel established");
+            let _ = self.event_tx.send(TunnelEvent::SessionEstablished {
+                session_id: session_id.to_string(),
+                remote_peer_id,
+            });
 
-        Ok(EncryptedTunnelSession {
-            transport: Arc::new(tokio::sync::Mutex::new(transport)),
-            stream,
-            session_id: session_id.to_string(),
-            remote_peer_id,
-            _permit: permit,
-        })
+            info!(session = session_id, "encrypted tunnel established");
+
+            return Ok(EncryptedTunnelSession {
+                transport: transport_arc,
+                stream,
+                session_id: session_id.to_string(),
+                remote_peer_id,
+                _permit: permit,
+            });
+        }
     }
 
     // ──────────────────────────────────────────────────────────
@@ -539,12 +573,12 @@ impl TunnelService {
         // Noise handshake. This is safe because the handshake hasn't started yet
         // and the session_id is not secret (it's just a binding value).
 
-        // Read session_id and peer_id from consumer (plaintext, before Noise handshake)
+        // Read session_id, peer_id, and optional ticket from consumer (plaintext, before Noise handshake).
         let hs_ms = config.handshake_timeout_ms;
-        let (session_id, remote_peer_id_str) = match handshake_read(
+        let (session_id, remote_peer_id_str, presented_ticket_bytes) = match handshake_read(
             hs_ms,
             "session preamble",
-            recv_session_and_peer_id(&mut stream),
+            recv_preamble(&mut stream),
         )
         .await
         {
@@ -560,8 +594,42 @@ impl TunnelService {
             session = session_id,
             remote_peer = %remote_peer_id_str,
             addr = %addr,
+            ticket_presented = presented_ticket_bytes.is_some(),
             "incoming tunnel connection accepted"
         );
+
+        // Check for a valid session ticket (fast-path resumption).
+        // If the consumer presented a ticket AND it passes crypto validation,
+        // we mark this as a resumed session — policy DB lookups are skipped
+        // and session continuity data (bytes transferred, sequence numbers)
+        // is restored. The Noise_XX handshake still runs for fresh key
+        // derivation (Noise ephemerals can't be replayed); the ticket
+        // provides identity continuity and state, not key reuse.
+        let mut is_resumed = false;
+        let mut resumed_state: Option<SessionState> = None;
+
+        if let (Some(ticket_bytes), Some(identity)) = (&presented_ticket_bytes, &config.identity) {
+            match attempt_ticket_resumption(ticket_bytes, identity, &remote_peer_id_str, &config.backend).await {
+                Ok(state) => {
+                    is_resumed = true;
+                    resumed_state = Some(state);
+                    info!(
+                        session = session_id,
+                        peer = %remote_peer_id_str,
+                        "session ticket validated — resuming session (skipping policy lookups)"
+                    );
+                }
+                Err(e) => {
+                    // Invalid/expired ticket: fall through to full handshake + policy check.
+                    debug!(
+                        session = session_id,
+                        peer = %remote_peer_id_str,
+                        error = %e,
+                        "presented ticket rejected, proceeding with full handshake"
+                    );
+                }
+            }
+        }
 
         // Now construct the prologue with the session_id
         prologue.extend_from_slice(session_id.as_bytes());
@@ -652,7 +720,14 @@ impl TunnelService {
         //     handshake (the remote peer id is now authenticated) and before
         //     any session slot is spent. The permit holds quota slots for the
         //     whole session and releases them on drop.
-        let _policy_permit: Option<PolicyPermit> = match &config.policy {
+        //
+        //     Skipped on resumed sessions — the ticket already proves
+        //     authenticated identity continuity; re-running reputation lookups
+        //     for a peer that just had a successful session is unnecessary.
+        let _policy_permit: Option<PolicyPermit> = if is_resumed {
+            None
+        } else {
+            match &config.policy {
             None => None,
             Some(policy) => {
                 let reputation = config
@@ -723,7 +798,8 @@ impl TunnelService {
                     }
                 }
             }
-        };
+            } // close match &config.policy
+        }; // close if is_resumed / else
 
         // 3. Acquire a session slot from the availability engine
         {
@@ -775,6 +851,41 @@ impl TunnelService {
         };
 
         let transport = Arc::new(tokio::sync::Mutex::new(transport));
+
+        // 7.0 Issue and store a session ticket (provider side).
+        // Always sends an encrypted signal frame to the consumer:
+        //   [0x01, <ticket bytes>] — ticket follows (store it for resumption)
+        //   [0x00]                — no ticket (tickets disabled or issue failed)
+        // This frame arrives before relay starts, over the authenticated channel.
+        let ticket_signal: Vec<u8> = if config.enable_session_tickets {
+            if let Some(identity) = &config.identity {
+                let state = SessionState {
+                    encryption_key: vec![],   // transport keys not extractable from snow
+                    decryption_key: vec![],
+                    send_sequence: 0,
+                    recv_sequence: 0,
+                    bytes_sent: resumed_state.as_ref().map(|s| s.bytes_sent).unwrap_or(0),
+                    bytes_received: resumed_state.as_ref().map(|s| s.bytes_received).unwrap_or(0),
+                };
+                match build_ticket_frame(identity, &session_id, &remote_peer_id_str, state, &config.backend).await {
+                    Ok(frame) => {
+                        info!(session = %session_id, "session ticket issued");
+                        frame
+                    }
+                    Err(e) => {
+                        warn!(session = %session_id, error = %e, "session ticket issuance failed (non-fatal), sending no-ticket signal");
+                        vec![0x00]
+                    }
+                }
+            } else {
+                vec![0x00]
+            }
+        } else {
+            vec![0x00]
+        };
+        if let Err(e) = send_encrypted_frame(&mut stream, transport.clone(), &ticket_signal).await {
+            warn!(session = %session_id, error = %e, "failed to send ticket signal frame (non-fatal)");
+        }
 
         // 7. Bidirectional encrypted relay with metering
         let (bytes_sent, bytes_received, avg_latency_ms) = Self::encrypted_relay_with_metering(
@@ -1123,8 +1234,30 @@ async fn recv_wire_msg(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize> 
     Ok(len)
 }
 
+/// Receive a length-prefixed message (2-byte big-endian header) into a Vec buffer.
+async fn recv_wire_msg_vec(stream: &mut TcpStream, buf: &mut Vec<u8>) -> Result<usize> {
+    let mut len_buf = [0u8; 2];
+    stream.read_exact(&mut len_buf).await?;
+    let len = u16::from_be_bytes(len_buf) as usize;
+
+    if len > buf.len() {
+        bail!(
+            "received wire packet length {} exceeds buffer size {}",
+            len,
+            buf.len()
+        );
+    }
+
+    stream.read_exact(&mut buf[..len]).await?;
+    Ok(len)
+}
+
 /// Send session ID and local peer ID as length-prefixed messages
 /// (4-byte big-endian header each). Used before the Noise handshake.
+///
+/// Superseded by `send_preamble` (which also carries the optional ticket).
+/// Kept for reference; `send_preamble` is used in all live code paths.
+#[allow(dead_code)]
 async fn send_session_id(stream: &mut TcpStream, session_id: &str, peer_id: &str) -> Result<()> {
     let session_bytes = session_id.as_bytes();
     stream
@@ -1151,8 +1284,12 @@ async fn send_session_id(stream: &mut TcpStream, session_id: &str, peer_id: &str
 /// Receive session ID and remote peer ID as length-prefixed messages (4-byte
 /// big-endian header each). Used before the Noise handshake.
 ///
+/// Superseded by `recv_preamble` (which also reads the optional ticket flag).
+/// Kept for reference; `recv_preamble` is used in all live code paths.
+///
 /// The session ID is capped at 256 bytes and the peer ID at 512 bytes to
 /// prevent an attacker from allocating unbounded memory via a crafted u32.
+#[allow(dead_code)]
 async fn recv_session_and_peer_id(stream: &mut TcpStream) -> Result<(String, String)> {
     let session_len = stream
         .read_u32()
@@ -1193,6 +1330,245 @@ async fn recv_session_and_peer_id(stream: &mut TcpStream) -> Result<(String, Str
         String::from_utf8(peer_buf).context("invalid peer ID encoding")?;
 
     Ok((session_id, peer_id))
+}
+
+// ──────────────────────────────────────────────────────────────
+// Session ticket helpers
+// ──────────────────────────────────────────────────────────────
+
+/// Extended preamble: session_id + peer_id + 1-byte ticket flag +
+/// optional [2-byte big-endian length + ticket bytes].
+///
+/// Flag byte:
+///   0x00 = no ticket (new session or tickets disabled on consumer)
+///   0x01 = ticket follows
+///
+/// Backward compatible: old providers only call `recv_session_and_peer_id`
+/// which stops after reading peer_id, so the extra bytes are harmless.
+async fn send_preamble(
+    stream: &mut TcpStream,
+    session_id: &str,
+    peer_id: &str,
+    ticket: Option<&[u8]>,
+) -> Result<()> {
+    // session_id (4-byte length + bytes)
+    let session_bytes = session_id.as_bytes();
+    stream.write_u32(session_bytes.len() as u32).await?;
+    stream.write_all(session_bytes).await?;
+
+    // peer_id (4-byte length + bytes)
+    let peer_bytes = peer_id.as_bytes();
+    stream.write_u32(peer_bytes.len() as u32).await?;
+    stream.write_all(peer_bytes).await?;
+
+    // ticket flag + optional ticket
+    match ticket {
+        Some(t) if !t.is_empty() => {
+            stream.write_u8(0x01).await?;
+            let tlen = u16::try_from(t.len())
+                .map_err(|_| anyhow!("ticket too large for wire (>65535 bytes)"))?;
+            stream.write_u16(tlen).await?;
+            stream.write_all(t).await?;
+        }
+        _ => {
+            stream.write_u8(0x00).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Receive the extended preamble. Returns (session_id, peer_id, Option<ticket_bytes>).
+async fn recv_preamble(stream: &mut TcpStream) -> Result<(String, String, Option<Vec<u8>>)> {
+    // session_id
+    let session_len = stream.read_u32().await.context("preamble: session_id length")? as usize;
+    if session_len > 256 {
+        bail!("session ID length {} exceeds maximum of 256 bytes", session_len);
+    }
+    let mut session_buf = vec![0u8; session_len];
+    stream.read_exact(&mut session_buf).await.context("preamble: session_id")?;
+    let session_id = String::from_utf8(session_buf).context("preamble: invalid session_id encoding")?;
+
+    // peer_id
+    let peer_len = stream.read_u32().await.context("preamble: peer_id length")? as usize;
+    if peer_len > 512 {
+        bail!("peer ID length {} exceeds maximum of 512 bytes", peer_len);
+    }
+    let mut peer_buf = vec![0u8; peer_len];
+    stream.read_exact(&mut peer_buf).await.context("preamble: peer_id")?;
+    let peer_id = String::from_utf8(peer_buf).context("preamble: invalid peer_id encoding")?;
+
+    // ticket flag
+    let flag = stream.read_u8().await.context("preamble: ticket flag")?;
+    let ticket = if flag == 0x01 {
+        let tlen = stream.read_u16().await.context("preamble: ticket length")? as usize;
+        if tlen > 2048 {
+            bail!("ticket length {} exceeds maximum of 2048 bytes", tlen);
+        }
+        let mut tbuf = vec![0u8; tlen];
+        stream.read_exact(&mut tbuf).await.context("preamble: ticket data")?;
+        Some(tbuf)
+    } else {
+        None
+    };
+
+    Ok((session_id, peer_id, ticket))
+}
+
+/// Send an encrypted frame over an established Noise transport.
+async fn send_encrypted_frame(
+    stream: &mut TcpStream,
+    transport: Arc<tokio::sync::Mutex<TransportState>>,
+    plaintext: &[u8],
+) -> Result<()> {
+    // Heap-allocate the output buffer to avoid blowing up async future sizes.
+    let mut enc_buf = vec![0u8; NOISE_MAX_MSG_LEN];
+    let enc_len = {
+        let mut t = transport.lock().await;
+        t.write_message(plaintext, &mut enc_buf)
+            .context("encrypt frame failed")?
+    };
+    send_wire_msg(stream, &enc_buf[..enc_len]).await
+}
+
+/// Receive and decrypt a single encrypted frame.
+async fn recv_encrypted_frame(
+    stream: &mut TcpStream,
+    transport: Arc<tokio::sync::Mutex<TransportState>>,
+) -> Result<Vec<u8>> {
+    // Heap-allocate buffers to avoid blowing up async future sizes.
+    let mut raw_buf = vec![0u8; NOISE_MAX_MSG_LEN];
+    let raw_len = recv_wire_msg_vec(stream, &mut raw_buf).await?;
+    let mut plain_buf = vec![0u8; NOISE_MAX_MSG_LEN];
+    let plain_len = {
+        let mut t = transport.lock().await;
+        t.read_message(&raw_buf[..raw_len], &mut plain_buf)
+            .context("decrypt frame failed")?
+    };
+    Ok(plain_buf[..plain_len].to_vec())
+}
+
+/// Issue a session ticket, store it to the backend, and return it as a
+/// signal frame: `[0x01, <ticket bytes>]` for inclusion in the first
+/// encrypted Noise frame sent to the consumer.
+async fn build_ticket_frame(
+    identity: &crate::identity::NodeIdentity,
+    session_id: &str,
+    consumer_peer_id: &str,
+    state: SessionState,
+    backend: &Arc<dyn MetricsBackend>,
+) -> Result<Vec<u8>> {
+    let ticket = SessionTicket::issue(identity, session_id.to_string(), consumer_peer_id.to_string(), state)
+        .context("ticket issue failed")?;
+    let ticket_bytes = ticket.serialize().context("ticket serialize failed")?;
+
+    // Persist to DB for later lookup on reconnect.
+    backend
+        .store_session_ticket(session_id, consumer_peer_id, &ticket_bytes, ticket.expires_at as i64)
+        .await
+        .context("store session ticket failed")?;
+
+    // Build the signal frame: flag byte 0x01 + ticket bytes.
+    let mut frame = Vec::with_capacity(1 + ticket_bytes.len());
+    frame.push(0x01);
+    frame.extend_from_slice(&ticket_bytes);
+    Ok(frame)
+}
+
+/// Issue a session ticket, store it to the backend, and send it to the
+/// consumer as the first encrypted Noise frame.
+///
+/// Kept for any direct callers; prefer `build_ticket_frame` in new code.
+#[allow(dead_code)]
+async fn issue_and_send_ticket(
+    stream: &mut TcpStream,
+    transport: Arc<tokio::sync::Mutex<TransportState>>,
+    identity: &crate::identity::NodeIdentity,
+    session_id: &str,
+    consumer_peer_id: &str,
+    state: SessionState,
+    backend: &Arc<dyn MetricsBackend>,
+) -> Result<()> {
+    let frame = build_ticket_frame(identity, session_id, consumer_peer_id, state, backend).await?;
+    send_encrypted_frame(stream, transport, &frame).await
+}
+
+/// Attempt to validate a presented ticket. Returns the decrypted `SessionState`
+/// on success, or an error if the ticket is invalid/expired/unknown.
+async fn attempt_ticket_resumption(
+    ticket_bytes: &[u8],
+    identity: &crate::identity::NodeIdentity,
+    consumer_peer_id: &str,
+    backend: &Arc<dyn MetricsBackend>,
+) -> Result<SessionState> {
+    // Deserialize
+    let ticket = SessionTicket::deserialize(ticket_bytes)
+        .context("ticket deserialize failed")?;
+
+    // Check it hasn't expired
+    if ticket.is_expired() {
+        bail!("ticket expired");
+    }
+
+    // Confirm we still have it on record (prevents replay after manual revocation)
+    let stored = backend
+        .get_session_ticket(&ticket.session_id)
+        .await
+        .context("backend get_session_ticket failed")?;
+    if stored.is_none() {
+        bail!("ticket not found in store (expired or revoked)");
+    }
+
+    // Cryptographic verification + state decryption
+    let state = ticket
+        .verify_and_decrypt(identity, consumer_peer_id)
+        .context("ticket verification failed")?;
+
+    Ok(state)
+}
+
+/// Persist a received ticket to disk (consumer side).
+/// Path: `data/tickets/<provider_peer_id>.ticket`
+fn persist_ticket_to_disk(provider_peer_id: &str, ticket_bytes: &[u8]) {
+    // Sanitize peer id for use as a filename (replace path separators).
+    let safe_name: String = provider_peer_id
+        .chars()
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .collect();
+    let dir = std::path::Path::new(TICKET_STORE_DIR);
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        warn!(error = %e, "failed to create ticket store directory");
+        return;
+    }
+    let path = dir.join(format!("{safe_name}.ticket"));
+    if let Err(e) = std::fs::write(&path, ticket_bytes) {
+        warn!(error = %e, path = %path.display(), "failed to write session ticket to disk");
+    }
+}
+
+/// Load a previously-stored ticket from disk (consumer side).
+/// Returns `None` if no ticket exists or it fails to read.
+fn load_ticket_from_disk(provider_peer_id: &str) -> Option<Vec<u8>> {
+    let safe_name: String = provider_peer_id
+        .chars()
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .collect();
+    let path = std::path::Path::new(TICKET_STORE_DIR).join(format!("{safe_name}.ticket"));
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            // Quick pre-check: deserialize to see if it's still valid before sending.
+            match SessionTicket::deserialize(&bytes) {
+                Ok(t) if !t.is_expired() => Some(bytes),
+                Ok(_) => {
+                    debug!("cached ticket for {provider_peer_id} is expired, ignoring");
+                    // Remove stale ticket so it doesn't clutter the dir.
+                    let _ = std::fs::remove_file(&path);
+                    None
+                }
+                Err(_) => None,
+            }
+        }
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]

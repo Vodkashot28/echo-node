@@ -592,3 +592,197 @@ async fn accountability_gate_denies_and_attributes_violation() {
 
     listener_task.abort();
 }
+
+/// Session ticket integration test:
+///
+/// 1. First connection: full Noise_XX handshake, provider issues ticket,
+///    consumer receives and persists it to `data/tickets/`.
+/// 2. Simulate provider restart: new TunnelService with same identity + DB.
+/// 3. Reconnect: consumer presents stored ticket in preamble, provider
+///    validates it, issues a new ticket, relay works.
+#[tokio::test]
+async fn session_ticket_issued_stored_and_resumed() {
+    let dir = TempDir::new().unwrap();
+
+    let provider =
+        NodeIdentity::load_or_generate(&dir.path().join("provider.json"), "us-test").unwrap();
+    let consumer =
+        NodeIdentity::load_or_generate(&dir.path().join("consumer.json"), "us-test").unwrap();
+    let provider_peer_id: libp2p::PeerId = provider.peer_id_str().parse().unwrap();
+    let consumer_peer_id: libp2p::PeerId = consumer.peer_id_str().parse().unwrap();
+    let provider_noise_pubkey = provider.noise_public_key_bytes().to_vec();
+
+    let db_path = format!("sqlite:{}", dir.path().join("ticket_test.db").display());
+    let backend = Arc::new(SqliteStore::new(&db_path).await.unwrap());
+    let echo_addr = spawn_echo_server().await;
+
+    // ── First provider instance ───────────────────────────────────
+    let port1 = free_port().await;
+    let (listener1, tunnel_addr1) = Box::pin(spawn_provider_with_tickets(
+        port1, provider.clone(), backend.clone(), echo_addr.clone(),
+    )).await;
+
+    // ── Build consumer service ────────────────────────────────────
+    let consumer_avail = Arc::new(RwLock::new(AvailabilityEngine::new(0.0, 0.0, 4)));
+    let (consumer_metering, _) = MeteringEngine::new(consumer.clone());
+    let consumer_config = RelayConfig {
+        backend: backend.clone(),
+        metering: consumer_metering.clone(),
+        availability: consumer_avail.clone(),
+        target_addr: "127.0.0.1:1".to_string(),
+        local_peer_id: consumer.peer_id_str().to_string(),
+        identity: None,
+        max_upload_mbps: 10.0,
+        max_download_mbps: 10.0,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 5_000,
+        enable_session_tickets: false,
+    };
+    let (consumer_svc, _) = TunnelService::new(
+        consumer_peer_id,
+        consumer_metering,
+        consumer_avail,
+        consumer_config,
+        4,
+        consumer.noise_secret_key_bytes().to_vec(),
+    );
+    let consumer_svc = Arc::new(consumer_svc);
+
+    // ── First connection: full Noise_XX ───────────────────────────
+    let session1 = retry_connect(&consumer_svc, &tunnel_addr1, provider_peer_id, "ticket-sess-t1", &provider_noise_pubkey).await;
+
+    // Quick relay to confirm the tunnel works.
+    let mut s1 = session1;
+    do_echo_roundtrip(&mut s1, b"first-connection-test\n").await;
+    drop(s1);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Ticket must be persisted to disk by the consumer.
+    let ticket_path = std::path::Path::new("data/tickets")
+        .join(format!("{}.ticket", provider_peer_id));
+    assert!(ticket_path.exists(), "consumer must persist ticket to {}", ticket_path.display());
+
+    // Ticket must be in the DB on the provider side.
+    let stored = backend.get_session_ticket("ticket-sess-t1").await.unwrap();
+    assert!(stored.is_some(), "provider must store ticket in DB");
+
+    // ── Simulated provider restart ────────────────────────────────
+    listener1.abort();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let port2 = free_port().await;
+    let (listener2, tunnel_addr2) = Box::pin(spawn_provider_with_tickets(
+        port2, provider.clone(), backend.clone(), echo_addr.clone(),
+    )).await;
+
+    // ── Second connection: consumer sends stored ticket ───────────
+    let session2 = retry_connect(&consumer_svc, &tunnel_addr2, provider_peer_id, "ticket-sess-t1", &provider_noise_pubkey).await;
+
+    let mut s2 = session2;
+    do_echo_roundtrip(&mut s2, b"resumed-connection-test\n").await;
+    drop(s2);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Clean up ticket so it doesn't affect other test runs.
+    let _ = std::fs::remove_file(&ticket_path);
+
+    listener2.abort();
+}
+
+/// Spawn a provider tunnel listener with session tickets enabled.
+/// Returns (listener_task, tunnel_addr).
+async fn spawn_provider_with_tickets(
+    port: u16,
+    provider: NodeIdentity,
+    backend: Arc<SqliteStore>,
+    echo_addr: String,
+) -> (tokio::task::JoinHandle<()>, String) {
+    let availability = Arc::new(RwLock::new(AvailabilityEngine::new(100.0, 100.0, 10)));
+    let (metering, _rx) = MeteringEngine::with_config(provider.clone(), 1, 0);
+    let provider_peer_id: libp2p::PeerId = provider.peer_id_str().parse().unwrap();
+    let relay_config = RelayConfig {
+        backend: backend.clone(),
+        metering: metering.clone(),
+        availability: availability.clone(),
+        target_addr: echo_addr,
+        local_peer_id: provider.peer_id_str().to_string(),
+        identity: Some(Arc::new(provider.clone())),
+        max_upload_mbps: 10.0,
+        max_download_mbps: 10.0,
+        policy: None,
+        security: Arc::new(SecurityCounters::default()),
+        handshake_timeout_ms: 5_000,
+        enable_session_tickets: true,
+    };
+    let (svc, _events) = TunnelService::new(
+        provider_peer_id,
+        metering,
+        availability,
+        relay_config,
+        4,
+        provider.noise_secret_key_bytes().to_vec(),
+    );
+    let accept_config = RelayConfig {
+        backend: backend.clone(),
+        metering: svc.relay_config().metering.clone(),
+        availability: svc.relay_config().availability.clone(),
+        target_addr: svc.relay_config().target_addr.clone(),
+        local_peer_id: svc.relay_config().local_peer_id.clone(),
+        identity: svc.relay_config().identity.clone(),
+        max_upload_mbps: svc.relay_config().max_upload_mbps,
+        max_download_mbps: svc.relay_config().max_download_mbps,
+        policy: None,
+        security: svc.relay_config().security.clone(),
+        handshake_timeout_ms: svc.relay_config().handshake_timeout_ms,
+        enable_session_tickets: true,
+    };
+    let tunnel_addr = format!("127.0.0.1:{port}");
+    let listen_addr = tunnel_addr.clone();
+    let event_tx = svc.event_tx().clone();
+    let semaphore = svc.conn_semaphore();
+    let sk = svc.static_private_key();
+    let task = tokio::spawn(async move {
+        TunnelService::accept_incoming(&listen_addr, event_tx, accept_config, semaphore, sk)
+            .await
+            .ok();
+    });
+    (task, tunnel_addr)
+}
+
+/// Retry `connect_to_provider` up to 10 times with 50ms back-off.
+async fn retry_connect(
+    svc: &Arc<TunnelService>,
+    addr: &str,
+    peer_id: libp2p::PeerId,
+    session_id: &str,
+    noise_pubkey: &[u8],
+) -> echo_daemon::tunnel::EncryptedTunnelSession {
+    for attempt in 0..10 {
+        match svc.connect_to_provider(addr, peer_id, session_id, noise_pubkey).await {
+            Ok(s) => return s,
+            Err(e) => {
+                assert!(attempt < 9, "connect_to_provider failed after 10 attempts: {e}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+    unreachable!()
+}
+
+/// Send payload through tunnel, read echo back, assert roundtrip.
+async fn do_echo_roundtrip(session: &mut echo_daemon::tunnel::EncryptedTunnelSession, payload: &[u8]) {
+    let mut enc = [0u8; NOISE_MAX_MSG_LEN];
+    let n = session.transport.lock().await.write_message(payload, &mut enc).unwrap();
+    session.stream.write_all(&enc[..n]).await.unwrap();
+
+    let mut raw = [0u8; NOISE_MAX_MSG_LEN];
+    let mut plain = [0u8; NOISE_MAX_MSG_LEN];
+    let rn = tokio::time::timeout(Duration::from_secs(5), session.stream.read(&mut raw))
+        .await
+        .expect("echo should return within 5s")
+        .unwrap();
+    assert!(rn > 0, "echo server must return data");
+    let pn = session.transport.lock().await.read_message(&raw[..rn], &mut plain).unwrap();
+    assert_eq!(&plain[..pn], payload, "echo roundtrip payload mismatch");
+}
