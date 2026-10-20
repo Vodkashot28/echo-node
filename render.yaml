@@ -1,10 +1,12 @@
 services:
   - type: web
     name: echo-node
-    runtime: docker
     # Prebuilt image published by .github/workflows/docker.yml → GHCR.
     # Render pulls it instead of building (deploy ≈ pull + start, no Rust
     # compile). Keep this path in sync with that workflow's tags.
+    # NOTE: `runtime: image` is required by Render's blueprint validator —
+    # `docker` runtime cannot be combined with an image field.
+    runtime: image
     image:
       url: ghcr.io/vodkashot28/echo-node:latest
     # Image updates are NOT automatic on push: the GHCR job must finish
@@ -35,8 +37,15 @@ services:
         value: "false"
       - key: NODE_REGION
         value: auto
-      # Secrets — set these via the Render dashboard or `render env set`:
-      # DATABASE_URL      — Neon/Postgres URL (leave unset to use SQLite)
-      # API_KEY           — Bearer token for /control + /settlements
-      # USER_ID           — your user identifier
-      # NODE_NAME         — display name for this node
+      # Secrets — values live in the Render dashboard, never in this file.
+      # `sync: false` reserves the key: the first `render blueprint launch`
+      # prompts for the value; afterwards the dashboard copy is authoritative
+      # and this file never stores it.
+      - key: DATABASE_URL
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: USER_ID
+        value: default
+      - key: NODE_NAME
+        value: EchoNode
