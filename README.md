@@ -626,7 +626,7 @@ reliability spool, and the open roadmap.
 | `NODE_ID` | `node-{epoch}` | Node identifier |
 | `NODE_NAME` | `EchoNode` | Display name |
 | `NODE_REGION` | `auto` | Region tag for DHT publishing |
-| `LISTEN_ADDR` | `0.0.0.0:3001` | REST API bind address |
+| `LISTEN_ADDR` | `0.0.0.0:3001` | REST API bind address. When unset/empty, falls back to a platform-injected `PORT` (Render/Heroku-style hosts), then to the default |
 | `SQLITE_DB` | `sqlite:echo_node.db` | SQLite database path |
 | `PING_TARGETS` | `1.1.1.1,8.8.8.8,208.67.222.222` | Comma-separated ping targets |
 | `MAX_UPLOAD_MBPS` | `100.0` | Physical uplink capacity (Mbps) |

@@ -394,13 +394,13 @@ impl TunnelService {
 
             info!(session = session_id, "encrypted tunnel established");
 
-            return Ok(EncryptedTunnelSession {
+            Ok(EncryptedTunnelSession {
                 transport: transport_arc,
                 stream,
                 session_id: session_id.to_string(),
                 remote_peer_id,
                 _permit: permit,
-            });
+            })
         }
     }
 
@@ -1234,24 +1234,6 @@ async fn recv_wire_msg(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize> 
     Ok(len)
 }
 
-/// Receive a length-prefixed message (2-byte big-endian header) into a Vec buffer.
-async fn recv_wire_msg_vec(stream: &mut TcpStream, buf: &mut Vec<u8>) -> Result<usize> {
-    let mut len_buf = [0u8; 2];
-    stream.read_exact(&mut len_buf).await?;
-    let len = u16::from_be_bytes(len_buf) as usize;
-
-    if len > buf.len() {
-        bail!(
-            "received wire packet length {} exceeds buffer size {}",
-            len,
-            buf.len()
-        );
-    }
-
-    stream.read_exact(&mut buf[..len]).await?;
-    Ok(len)
-}
-
 /// Send session ID and local peer ID as length-prefixed messages
 /// (4-byte big-endian header each). Used before the Noise handshake.
 ///
@@ -1437,7 +1419,7 @@ async fn recv_encrypted_frame(
 ) -> Result<Vec<u8>> {
     // Heap-allocate buffers to avoid blowing up async future sizes.
     let mut raw_buf = vec![0u8; NOISE_MAX_MSG_LEN];
-    let raw_len = recv_wire_msg_vec(stream, &mut raw_buf).await?;
+    let raw_len = recv_wire_msg(stream, &mut raw_buf).await?;
     let mut plain_buf = vec![0u8; NOISE_MAX_MSG_LEN];
     let plain_len = {
         let mut t = transport.lock().await;

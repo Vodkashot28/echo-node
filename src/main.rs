@@ -162,7 +162,10 @@ impl Config {
             user_id: std::env::var("USER_ID").unwrap_or_else(|_| "anonymous".to_string()),
             node_name: std::env::var("NODE_NAME").unwrap_or_else(|_| "EchoNode".to_string()),
             region: std::env::var("NODE_REGION").unwrap_or_else(|_| "auto".to_string()),
-            listen_addr: std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".to_string()),
+            listen_addr: resolve_listen_addr(
+                std::env::var("LISTEN_ADDR").ok(),
+                std::env::var("PORT").ok(),
+            ),
             db_path: std::env::var("SQLITE_DB").unwrap_or_else(|_| "sqlite:echo_node.db".to_string()),
             tunnel_listen_addr: std::env::var("TUNNEL_ADDR").unwrap_or_else(|_| "0.0.0.0:3002".to_string()),
             relay_target: std::env::var("RELAY_TARGET").unwrap_or_else(|_| "127.0.0.1:80".to_string()),
@@ -204,6 +207,42 @@ impl Config {
                 .ok()
                 .filter(|v| !v.is_empty()),
         }
+    }
+}
+
+/// REST API bind-address precedence: explicit `LISTEN_ADDR` > platform-injected
+/// `$PORT` (Render/Heroku-style hosts set `PORT`, never `LISTEN_ADDR`) > default.
+/// Empty/whitespace `LISTEN_ADDR` counts as unset; `$PORT` must parse as a u16
+/// or it is ignored. Pure over env reads so it stays unit-testable.
+fn resolve_listen_addr(listen_addr: Option<String>, port: Option<String>) -> String {
+    if let Some(addr) = listen_addr {
+        if !addr.trim().is_empty() {
+            return addr;
+        }
+    }
+    if let Some(port) = port {
+        if let Ok(port) = port.trim().parse::<u16>() {
+            return format!("0.0.0.0:{port}");
+        }
+    }
+    "0.0.0.0:3001".to_string()
+}
+
+/// Strip embedded credentials from a URL before logging:
+/// `postgres://user:pass@host/db` → `postgres://***@host/db`.
+/// Only the authority component is inspected (`@` in a path/query is left
+/// alone), and URLs without userinfo pass through unchanged.
+fn redact_url_credentials(url: &str) -> String {
+    let Some(scheme_idx) = url.find("://") else {
+        return url.to_string();
+    };
+    let (scheme, rest) = url.split_at(scheme_idx + 3);
+    let authority_end = rest
+        .find(['/', '?', '#'])
+        .unwrap_or(rest.len());
+    match rest[..authority_end].find('@') {
+        Some(at) => format!("{scheme}***@{}", &rest[at + 1..]),
+        None => url.to_string(),
     }
 }
 
@@ -1681,7 +1720,7 @@ async fn run_daemon() -> Result<()> {
 
     // Step 2: Initialize database backend
     let backend: Arc<dyn MetricsBackend> = if let Some(url) = &config.database_url {
-        info!(backend = "neon", url = %url, "database backend initialized");
+        info!(backend = "neon", url = %redact_url_credentials(url), "database backend initialized");
         Arc::new(neon::NeonStore::with_config(
             url,
             config.neon_max_connections,
@@ -1921,7 +1960,7 @@ async fn run_daemon() -> Result<()> {
     let reporter = match DashboardConfig::from_env() {
         Some(cfg) => {
             info!(
-                url = %cfg.url,
+                url = %redact_url_credentials(&cfg.url),
                 "dashboard telemetry reporting enabled"
             );
             Some(DashboardReporter::spawn(cfg))
@@ -3251,5 +3290,59 @@ mod tests {
         // Empty input stays empty.
         let out = filter_match_providers(vec![], "self-peer", &empty, now, 300);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn listen_addr_prefers_explicit_value() {
+        // Explicit LISTEN_ADDR always wins, even when PORT is set.
+        assert_eq!(
+            resolve_listen_addr(Some("127.0.0.1:9999".into()), Some("10000".into())),
+            "127.0.0.1:9999"
+        );
+    }
+
+    #[test]
+    fn listen_addr_falls_back_to_platform_port() {
+        // Render/Heroku inject PORT; empty LISTEN_ADDR counts as unset.
+        assert_eq!(resolve_listen_addr(None, Some("10000".into())), "0.0.0.0:10000");
+        assert_eq!(
+            resolve_listen_addr(Some(String::new()), Some("10000".into())),
+            "0.0.0.0:10000"
+        );
+        assert_eq!(
+            resolve_listen_addr(Some("   ".into()), Some("8080".into())),
+            "0.0.0.0:8080"
+        );
+    }
+
+    #[test]
+    fn listen_addr_invalid_or_missing_port_uses_default() {
+        assert_eq!(resolve_listen_addr(None, Some("notaport".into())), "0.0.0.0:3001");
+        assert_eq!(resolve_listen_addr(None, Some("70000".into())), "0.0.0.0:3001");
+        assert_eq!(resolve_listen_addr(None, None), "0.0.0.0:3001");
+    }
+
+    #[test]
+    fn redact_url_strips_embedded_password() {
+        assert_eq!(
+            redact_url_credentials(
+                "postgresql://neondb_owner:sekrit@ep-host.aws.neon.tech/neondb?sslmode=require"
+            ),
+            "postgresql://***@ep-host.aws.neon.tech/neondb?sslmode=require"
+        );
+    }
+
+    #[test]
+    fn redact_url_leaves_plain_urls_unchanged() {
+        // No scheme, no userinfo, and '@' outside the authority (path) all pass through.
+        assert_eq!(redact_url_credentials("sqlite:echo_node.db"), "sqlite:echo_node.db");
+        assert_eq!(
+            redact_url_credentials("https://example.com/functions/v1/report-telemetry"),
+            "https://example.com/functions/v1/report-telemetry"
+        );
+        assert_eq!(
+            redact_url_credentials("https://example.com/@team/hooks"),
+            "https://example.com/@team/hooks"
+        );
     }
 }

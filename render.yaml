@@ -2,10 +2,15 @@ services:
   - type: web
     name: echo-node
     runtime: docker
-    # Render builds from the Dockerfile in the repo root
-    dockerfilePath: ./Dockerfile
-    # Render sets $PORT; we map it to LISTEN_ADDR
-    # The app binds on 0.0.0.0:$PORT via the startCommand override below.
+    # Prebuilt image published by .github/workflows/docker.yml → GHCR.
+    # Render pulls it instead of building (deploy ≈ pull + start, no Rust
+    # compile). Keep this path in sync with that workflow's tags.
+    image:
+      url: ghcr.io/vodkashot28/echo-node:latest
+    # Image updates are NOT automatic on push: the GHCR job must finish
+    # pushing :latest first, so deploy manually (dashboard → Deploy) or via
+    # the Render API once the workflow is green.
+    autoDeploy: false
     # Render health-checks the HTTP port automatically once the service is up.
     healthCheckPath: /health
     # Render free tier — upgrade to standard for persistent disk + more RAM
