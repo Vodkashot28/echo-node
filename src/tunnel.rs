@@ -127,7 +127,7 @@ pub struct RelayConfig {
 
 /// Full accounting for a completed relay session, populated on the provider
 /// side (where the relay accounting is authoritative) and used to federate
-/// the session to the dashboard (see `telemetry.rs` / GAPS.md Slice 2).
+/// the session to the dashboard (see `telemetry.rs` / DASHBOARD.md).
 #[derive(Debug, Clone)]
 pub struct SessionCloseDetails {
     pub remote_peer_id: String,

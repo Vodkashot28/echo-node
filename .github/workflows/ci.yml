@@ -54,7 +54,9 @@ jobs:
   test:
     name: cargo test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Tunnel e2e tests (session ticket resumption, Noise_XX relay) can take
+    # several minutes on cold CI runners — bumped from 30 to 45.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -66,8 +68,13 @@ jobs:
         with:
           shared-key: ci
 
-      - name: Run test suite
-        run: cargo test --all-targets -- --nocapture
+      # Create the ticket store dir so the session-ticket e2e test can persist
+      # tickets during CI (tunnel_e2e::session_ticket_issued_stored_and_resumed).
+      - name: Create data directories
+        run: mkdir -p data/tickets
+
+      - name: Run test suite (230 tests)
+        run: cargo test -- --nocapture
 
   build:
     name: cargo build (release)
@@ -92,6 +99,6 @@ jobs:
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: echo-daemon-linux-x86_64
-          path: target/release/echo-daemon
+          name: echo-node-linux-amd64
+          path: target/release/echo-node
           retention-days: 14

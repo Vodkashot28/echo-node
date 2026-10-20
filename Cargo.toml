@@ -3,6 +3,13 @@ name = "echo-daemon"
 version = "0.3.0"
 edition = "2021"
 
+# Operator-facing binary name — canonical across clap (`--help`/`--version`),
+# release artifacts, the installer, and the docs. The package name above stays
+# `echo-daemon` for internal crate organization only.
+[[bin]]
+name = "echo-node"
+path = "src/main.rs"
+
 [dependencies]
 # Async & Networking
 tokio = { version = "1.36", features = ["rt-multi-thread", "net", "time", "macros", "signal", "io-util", "sync"] }

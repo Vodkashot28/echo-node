@@ -1,6 +1,6 @@
 //! Dashboard telemetry bridge: pushes real metrics to a remote control-plane
 //! endpoint (a Supabase edge function for the echomesh dashboard). Two kinds
-//! of payload are federated (see GAPS.md):
+//! of payload are federated (see DASHBOARD.md):
 //!
 //! - **Heartbeat frames** — one per heartbeat cycle: node row, per-node and
 //!   network metric samples, and the 32-dim intelligence feature vector.

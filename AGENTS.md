@@ -2,46 +2,53 @@
 
 ## Build & Test
 
-Single Rust crate (`echo-daemon`), edition 2021, no workspace.
+Single Rust crate (package `echo-daemon`, binary `echo-node` via `[[bin]]` in Cargo.toml), edition 2021, no workspace.
 
 ```sh
 cargo check                       # type-check only (fast)
 cargo clippy --all-targets        # lint
-cargo test                        # 202 tests (156 lib, 20 main, 4 bidding e2e, 16 integration, 3 tunnel e2e, 2 dht market e2e, 1 consumer e2e)
+cargo test                        # 230 tests (161 lib, 30 main, 4 bidding e2e, 16 integration, 12 p0_fixes, 4 tunnel e2e, 2 dht market e2e, 1 consumer e2e)
 cargo build                       # compile
 ```
 
-- CI: `.github/workflows/ci.yml` runs check, clippy (`-D warnings`), test, and a
-  release build (uploads the binary as an artifact) on push/PR — use it instead
-  of building locally when disk/CPU is scarce (e.g. Termux).
+- CI: `.github/workflows/ci.yml` runs check, clippy (`-D warnings`), test (45 min timeout — tunnel e2e with session resumption can take several minutes), and a release build (uploads the binary as an artifact) on push/PR.
+- The CI `test` job creates `data/tickets/` before running tests — the `session_ticket_issued_stored_and_resumed` e2e test persists tickets there.
 - `sqlx` is a required dependency (SQLite + PostgreSQL), currently **0.8** (lockfile 0.8.6). There is no `persistence` feature flag anymore — if you see DB-related compile errors, the issue is elsewhere.
 - `cargo test --no-run` can be slow on first build (~30s) due to dependency compilation.
 - No `rustfmt.toml` or `clippy.toml` — uses all defaults.
 
 ## Architecture
 
-| Module | Lines | Purpose |
-|--------|-------|---------|
-| `main.rs` | 3099 | Entry point, REST API (axum), heartbeat, background tasks, `NODE_MODE` gating |
-| `tunnel.rs` | 1230 | Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission, consumer-side `connect_to_provider` |
-| `bidding.rs` | 1846 | Marketplace price discovery: sealed-bid auctions, quality-adjusted scoring, Vickrey/first-price awards, 2s deadline sweeper (`BID_*` env); G6 wire types (`AuctionRecord`, auction-index encoding), `AuctionBook`, signed-bid verify, foreign-award import |
-| `consumer.rs` | 125 | Consumer forward listener: local apps → provider tunnel |
-| `neon.rs` | 578 | PostgreSQL backend (runs `migrations/postgres/*.sql`) |
-| `sqlite_store.rs` | 568 | SQLite backend (runs `migrations/sqlite/*.sql`) |
-| `migrator.rs` | 408 | Versioned SQL migrations: SQL splitter, ordered apply, `schema_migrations` tracking |
-| `meter.rs` | 524 | Token bucket rate limiter + signed receipt engine |
-| `models.rs` | 341 | Data structs, all `Serialize + Deserialize`, receipt signature verify, settlement records |
-| `settlement.rs` | 154 | Payout engine: verified receipts → idempotent settlement rows (bytes + USD); `settle_receipt_at_price` honors award-locked market prices |
-| `availability.rs` | 517 | Capacity engine + EWMA estimator (`AVAIL_EWMA_ALPHA`), session slot tracking |
-| `discovery.rs` | 528 | libp2p Kademlia DHT swarm (`DHT_*` env: bootstrap peers, network-id namespace, local-only mode); command channel (`DiscoveryCommand`) + result events (`DiscoveryEvent`); forced `kad::Mode::Server` so inbound record storage works without a confirmed external address |
-| `auth.rs` | 414 | Scoped API keys (`API_KEYS` JSON + legacy `API_KEY`), `require_scope` axum middleware |
-| `policy.rs` | 754 | Provider admission policy (`POLICY_*` env): reputation/latency gates + per-peer/region quotas (RAII permits), idle-time trust decay, soft-slashing gate |
-| `security.rs` | 584 | `SecurityCounters` — failure counters + bounded event ring + sliding-window burst alerts (`SECURITY_ALERT_*`) + per-peer violation attribution, surfaced in `/status`, `/health`, `GET /security`; alert sink feeds the ledger's `SecurityAlertRaised` |
-| `accountability.rs` | 167 | Soft-slashing: `soft_slash_score` = decayed reputation × violation discount × availability factor (no on-chain staking); gates `POLICY_MIN_ACCOUNTABILITY` |
-| `identity.rs` | 340 | Ed25519 + X25519 keypairs, file permissions, atomic writes + corrupt-file recovery |
-| `ledger.rs` | 812 | Canonical append-only audit ledger: `LedgerEvent` envelope (ed25519-signed, `sha256` hash chain, `ECHO_NETWORK` env), ULID event ids, `LedgerWriter::try_emit` → single FIFO writer task that advances the per-node sequence/prev/root chain and persists `ledger_events` |
-| `telemetry.rs` | 1052 | Optional dashboard bridge: heartbeat frames + session-close events → Supabase `report-telemetry` edge function; 32-dim feature vector, UUID node id, non-blocking bounded channel (`ReporterMessage`), durable disk spool + exponential backoff + shutdown flush |
-| `lib.rs` | 153 | `MetricsBackend` trait (19 methods), base64 utils, `constant_time_eq`, module declarations |
+Repo docs: `README.md` (operator guide — CLI usage, install, API),
+`ARCHITECTURE.md` (module-by-module deep dive + G6 marketplace),
+`DASHBOARD.md` (telemetry integration), `P0_FIXES.md` (verified P0 status),
+`INSTALLER.md` (one-command installer brief — release naming, flows,
+Termux/ARM notes). Line counts are deliberately omitted everywhere (they rot).
+
+| Module | Purpose |
+|--------|---------|
+| `main.rs` | Entry point, REST API (axum), heartbeat, background tasks, `NODE_MODE` gating |
+| `tunnel.rs` | Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission, consumer-side `connect_to_provider`, session ticket issuance + resumption |
+| `bidding.rs` | Marketplace price discovery: sealed-bid auctions, quality-adjusted scoring, Vickrey/first-price awards, 2s deadline sweeper (`BID_*` env); G6 wire types (`AuctionRecord`, auction-index encoding), `AuctionBook`, signed-bid verify, foreign-award import |
+| `consumer.rs` | Consumer forward listener: local apps → provider tunnel |
+| `neon.rs` | PostgreSQL backend (runs `migrations/postgres/*.sql`) |
+| `sqlite_store.rs` | SQLite backend (runs `migrations/sqlite/*.sql`) |
+| `migrator.rs` | Versioned SQL migrations: SQL splitter, ordered apply, `schema_migrations` tracking |
+| `session_ticket.rs` | Session ticket crypto: `SessionTicket` issue/verify/serialize, XOR-encrypted `SessionState`, ed25519 signatures for identity continuity across reconnects |
+| `meter.rs` | Token bucket rate limiter + signed receipt engine |
+| `models.rs` | Data structs, all `Serialize + Deserialize`, receipt signature verify, settlement records |
+| `settlement.rs` | Payout engine: verified receipts → idempotent settlement rows (bytes + USD); `settle_receipt_at_price` honors award-locked market prices |
+| `availability.rs` | Capacity engine + EWMA estimator (`AVAIL_EWMA_ALPHA`), session slot tracking |
+| `discovery.rs` | libp2p Kademlia DHT swarm (`DHT_*` env: bootstrap peers, network-id namespace, local-only mode); command channel (`DiscoveryCommand`) + result events (`DiscoveryEvent`); forced `kad::Mode::Server` so inbound record storage works without a confirmed external address |
+| `auth.rs` | Scoped API keys (`API_KEYS` JSON + legacy `API_KEY`), `require_scope` axum middleware |
+| `policy.rs` | Provider admission policy (`POLICY_*` env): reputation/latency gates + per-peer/region quotas (RAII permits), idle-time trust decay, soft-slashing gate |
+| `security.rs` | `SecurityCounters` — failure counters + bounded event ring + sliding-window burst alerts (`SECURITY_ALERT_*`) + per-peer violation attribution, surfaced in `/status`, `/health`, `GET /security`; alert sink feeds the ledger's `SecurityAlertRaised` |
+| `accountability.rs` | Soft-slashing: `soft_slash_score` = decayed reputation × violation discount × availability factor (no on-chain staking); gates `POLICY_MIN_ACCOUNTABILITY` |
+| `identity.rs` | Ed25519 + X25519 keypairs, file permissions, atomic writes + corrupt-file recovery |
+| `ledger.rs` | Canonical append-only audit ledger: `LedgerEvent` envelope (ed25519-signed, `sha256` hash chain, `ECHO_NETWORK` env), ULID event ids, `LedgerWriter::try_emit` → single FIFO writer task that advances the per-node sequence/prev/root chain and persists `ledger_events` |
+| `telemetry.rs` | Optional dashboard bridge: heartbeat frames + session-close events → Supabase `report-telemetry` edge function; 32-dim feature vector, UUID node id, non-blocking bounded channel (`ReporterMessage`), durable disk spool + exponential backoff + shutdown flush |
+| `lib.rs` | `MetricsBackend` trait (29 methods), base64 utils, `constant_time_eq`, module declarations |
+| `cli/` | Operator CLI (binary-side `mod`): onboard, start/stop/restart/status, doctor, marketplace, wallet, identity, logs, config |
 
 **Data flow:** `main.rs` wires everything. `MetricsBackend` trait abstracts storage — choose Neon or SQLite at startup based on `DATABASE_URL`.
 
@@ -70,7 +77,7 @@ The heartbeat in `main.rs` uses a strict 3-phase pattern to avoid nested locks:
 If you modify the heartbeat or add new background tasks, never hold `state` while acquiring `availability`.
 
 ### Double-end-session bug (already fixed)
-`end_session` is called only in `tunnel.rs:handle_incoming_connection` (provider side). The tunnel event handler in `main.rs` does NOT call it — the comments at lines 1377 and 1406 warn about this.
+`end_session` is called only in `tunnel.rs:handle_incoming_connection` (provider side). The tunnel event handler in `main.rs` does NOT call it — the comments around the event loop warn about this.
 
 ### Migration failures are retried
 Migrations apply inside a per-file transaction. Postgres is strict; SQLite tolerates only the exact `duplicate column name` error class (legacy idempotent column backfills). Any other failure rolls back and leaves the migration unrecorded — it is retried on the next boot, so never "skip" a broken migration by ignoring the log line.
@@ -98,7 +105,7 @@ Critical ones beyond README basics:
 - `BID_*` — marketplace bidding: `BID_WINDOW_SECS` (default auction window, default 30), `BID_W_REPUTATION` / `BID_W_LATENCY` (quality-score weights, 0.6 / 0.4), `BID_REF_LATENCY_MS` (latency half-score point, 100), `BID_PRICING` (`vickrey` default = winner paid `max(own, runner-up)`; `first` = pay-your-bid), `BID_AUTO` (provider mode: auto-bid on open auctions, default `false`), `BID_PRICE_USD_PER_GB` (auto-bid ask, defaults to `SETTLEMENT_RATE_USD_PER_GB`), `BID_POLL_SECS` (auto-bid poll, default 3). Auctions are in-memory (swept every 2 s); awards override the flat settlement rate per counterparty. G6: open auctions + award notices propagate over the DHT (`auction/{id}`, `auctions_by_host/{host}`, `auctions/{region}`); remote providers submit **signed** HTTP bids; the auto-bid task also discovers remote auctions (exact `NODE_REGION` match).
 - `DHT_*` — discovery: `DHT_LISTEN_ADDR` (default `/ip4/0.0.0.0/tcp/0`), `DHT_BOOTSTRAP_PEERS` (comma-separated multiaddrs each ending `/p2p/<peer-id>`), `DHT_NETWORK_ID` (default `echo`; namespaces the Kademlia protocol to `/<id>/kad/1.0.0`), `DHT_LOCAL_ONLY` (`true` = no bootstrap, dev mode).
 - `API_ADVERTISE_ADDR` — (unset) publicly reachable `http://host:port` base URL of this node's REST API, published inside DHT auction records so remote bidders can reach it; falls back to detected public IP + `LISTEN_ADDR` port, otherwise auction publishing waits.
-- `DASHBOARD_TELEMETRY_URL` + `ECHO_API_KEY` — enable the opt-in heartbeat → dashboard bridge (`telemetry.rs`); every payload carries `peer_id` for row correlation; auth is `Authorization: Bearer <ECHO_API_KEY>`. See `GAPS.md`. The bridge is fully off by default and never blocks the heartbeat.
+- `DASHBOARD_TELEMETRY_URL` + `ECHO_API_KEY` — enable the opt-in heartbeat → dashboard bridge (`telemetry.rs`); every payload carries `peer_id` for row correlation; auth is `Authorization: Bearer <ECHO_API_KEY>`. See `DASHBOARD.md`. The bridge is fully off by default and never blocks the heartbeat.
 - `DASHBOARD_TELEMETRY_SPOOL` (default `data/telemetry_spool.jsonl`) + `DASHBOARD_TELEMETRY_MAX_QUEUE` (default 256) + `DASHBOARD_TELEMETRY_BACKOFF_BASE_MS` (500) / `..._MAX_MS` (30000) — durable frame queue: overflow drops oldest, failures back off exponentially with jitter, unsent frames are flushed to the spool on shutdown and replayed on next boot.
 - `RUST_LOG` — default `echo_daemon=info`; set to `debug` for verbose output
 - `ECHO_NETWORK` — network tag stamped into every canonical ledger event (`LedgerEvent.network`; default `echomesh-devnet`); nodes on different networks keep separate audit chains
@@ -110,17 +117,18 @@ and POSTs to the Supabase `daemon-push` edge function every ~30s
 (`ECHO_NODE_TOKEN=<nodes.ingest_token>`, header `x-node-token`). The daemon
 never calls Supabase itself; the `DASHBOARD_*` telemetry bridge is separate
 and off by default. Run it under a `while true` supervisor loop. See
-`GAPS.md` + README “Dashboard Sync”.
+`DASHBOARD.md` + README “Dashboard Sync”.
 
 ## Testing
 
-- `src/` has pure unit tests (156 total: bidding 29, meter 22, policy 15, availability 15, telemetry 13, security 11, ledger 9, migrator 8, auth 8, accountability 6, models 6, discovery 5, tunnel 4, identity 4, settlement 1). No external services required.
+- `src/` has pure unit tests (191 total: 161 lib + 30 in `main.rs` — lib breakdown: bidding 29, meter 22, policy 15, availability 15, telemetry 13, security 11, ledger 9, migrator 8, auth 8, session_ticket 5, accountability 6, models 6, discovery 5, tunnel 4, identity 4, settlement 1). No external services required.
 - `tests/integration.rs` has 16 tests against a real SQLite store (tempfile-based): migration lifecycle, CRUD, concurrency, identity persistence, receipt round-trips, settlement, and a full ledger-writer round trip (append 3 + restart + resume at sequence 4, hash-chain links, `verify_event` on every row).
 - `tests/bidding_e2e.rs` has 4 tests covering the market pipeline: auction → sealed bids → deadline sweep → Vickrey award → settlement at the locked price (vs flat-rate fallback), budget-cap/requester guards, clean no-bid expiry, pricing-rule parsing.
 - `tests/dht_market_e2e.rs` has 2 tests running two in-process libp2p swarms (local-only, unique `network_id` per run): an auction record (index + record) propagates host→peer over Kademlia, and an award record reaches the winning provider. No external network required.
-- `tests/tunnel_e2e.rs` runs an in-process Noise_XX tunnel end-to-end: handshake, encrypted relay through an echo target, metering receipts, provider-side DB teardown (connection history, reputation), a slowloris test (stalled handshake → deadline close + counter), and a soft-slashing test (`min_accountability` gate denies post-handshake, counts the rejection, attributes a per-peer violation).
+- `tests/tunnel_e2e.rs` runs 4 in-process Noise_XX tunnel tests: handshake + relay + metering receipts + provider DB teardown; slowloris (stalled handshake → deadline + counter); soft-slashing gate denial; and **`session_ticket_issued_stored_and_resumed`** — full ticket lifecycle: issue after handshake → persist to disk + DB → simulated provider restart → consumer reconnects with stored ticket → provider validates and resumes session without policy re-checks.
 - `tests/consumer_e2e.rs` runs the full consumer-mode path: `run_consumer_listener` → `connect_to_provider` → relay to an echo target; asserts echo round-trip, availability slot acquire/release balance, provider connection history + signed receipt, and that the consumer never persists its own receipts.
-- `src/main.rs` has 20 tests: constant-time comparison, bps→Mbps, quality/trust scores, epoch sanity, ping RTT parsing, bandwidth env sanitization, `/match` request validation + provider filtering.
+- `tests/p0_fixes_integration.rs` has 12 tests: session ticket store/retrieve/cleanup, auction persistence CRUD (upsert, bids, status update, cleanup, crash recovery), relay-mode env parsing.
+- `src/main.rs` has 30 tests: constant-time comparison, bps→Mbps, quality/trust scores, epoch sanity, ping RTT parsing, bandwidth env sanitization, `/match` request validation + provider filtering, CLI command parsing.
 - To run a single test: `cargo test test_name` (e.g., `cargo test constant_time_eq`).
 - Env-var tests must be **one consolidated test per var family** (cargo runs tests in parallel threads in the same process); use unique keys where possible (`ECHO_TEST_*`).
 

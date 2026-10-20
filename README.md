@@ -338,29 +338,33 @@ Schema is created and upgraded by versioned SQL migrations (`migrations/{postgre
 
 ```
 src/
-├── lib.rs              # MetricsBackend trait (17 methods) + shared base64 utils + constant_time_eq
-├── accountability.rs   # Soft-slashing: composite score (reputation × violations × availability, trust decay) gating POLICY_MIN_ACCOUNTABILITY (167 lines)
-├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating (3099 lines)
-├── models.rs           # 10 data models (NodeRow, PeerReputation, SettlementRecord, etc.)
-├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, atomic writes + corrupt recovery (340 lines)
-├── ledger.rs           # Canonical append-only audit ledger: hash-chained, signed, versioned events (ECHO_NETWORK env) (812 lines)
+├── lib.rs              # MetricsBackend trait (29 methods) + shared base64 utils + constant_time_eq
+├── main.rs             # Entry point: heartbeat, REST API, background tasks, NODE_MODE gating
+├── models.rs           # 13 data models (NodeRow, PeerReputation, SettlementRecord, LedgerEventRow, etc.)
+├── identity.rs         # Ed25519 + X25519 keypairs, Peer ID, atomic writes + corrupt recovery
+├── ledger.rs           # Canonical append-only audit ledger: hash-chained, signed, versioned events (ECHO_NETWORK env)
 ├── discovery.rs        # libp2p Kademlia DHT swarm, command channel + result events, provider/market discovery (DHT_* env config)
-├── tunnel.rs           # Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission (1230 lines)
+├── tunnel.rs           # Noise_XX handshake (deadline-guarded), bidirectional relay, policy admission, session tickets
+├── session_ticket.rs   # Session ticket crypto: issue/verify, XOR-encrypted state, ed25519 signatures
 ├── consumer.rs         # Consumer forward listener: local apps → provider tunnel
 ├── meter.rs            # Token bucket, signed receipts, session metering
-├── availability.rs     # Capacity engine + EWMA estimator (AVAIL_EWMA_ALPHA), session management (517 lines)
+├── availability.rs     # Capacity engine + EWMA estimator (AVAIL_EWMA_ALPHA), session management
 ├── auth.rs             # Scoped API keys (API_KEYS), require_scope middleware
-├── bidding.rs          # Marketplace bidding: sealed-bid auctions, quality-adjusted scoring, Vickrey/first-price awards, G6 wire types + signed bids (1846 lines)
-├── policy.rs           # Provider admission policy (POLICY_* env): gates, quotas, RAII permits, trust decay, soft-slashing gate (754 lines)
-├── security.rs         # SecurityCounters — event ring + burst alerts (SECURITY_ALERT_* env) + per-peer violations, surfaced in /status, /health, /security (523 lines)
+├── bidding.rs          # Marketplace bidding: sealed-bid auctions, quality-adjusted scoring, Vickrey/first-price awards, G6 wire types + signed bids
+├── policy.rs           # Provider admission policy (POLICY_* env): gates, quotas, RAII permits, trust decay, soft-slashing gate
+├── security.rs         # SecurityCounters — event ring + burst alerts (SECURITY_ALERT_* env) + per-peer violations, surfaced in /status, /health, /security
+├── accountability.rs   # Soft-slashing: composite score (reputation × violations × availability, trust decay) gating POLICY_MIN_ACCOUNTABILITY
 ├── migrator.rs         # Versioned SQL migrations: splitter, apply, schema_migrations
 ├── neon.rs             # PostgreSQL backend (runs migrations/postgres/*.sql)
 ├── settlement.rs       # Payout engine: receipts → idempotent settlement rows (bytes + USD)
-├── telemetry.rs        # Optional dashboard bridge (DASHBOARD_* env): durable spool + backoff (1052 lines)
-└── sqlite_store.rs     # SQLite backend (runs migrations/sqlite/*.sql)
+├── telemetry.rs        # Optional dashboard bridge (DASHBOARD_* env): durable spool + backoff
+├── sqlite_store.rs     # SQLite backend (runs migrations/sqlite/*.sql)
+└── cli/                # Operator CLI (onboard, start/stop/status, marketplace, wallet, logs, config)
 ```
 
-The dashboard sync forwarder lives at `scripts/echo-sync.sh` (see
+For a deeper per-module walkthrough see [ARCHITECTURE.md](ARCHITECTURE.md);
+the dashboard integration lives in [DASHBOARD.md](DASHBOARD.md). The
+dashboard sync forwarder lives at `scripts/echo-sync.sh` (see
 [Dashboard Sync](#dashboard-sync) below).
 
 Migrations are versioned SQL files embedded at compile time from `migrations/{postgres,sqlite}/`, applied in order with `schema_migrations` tracking:
@@ -376,6 +380,133 @@ cp .env.example .env
 # Fill in DATABASE_URL, USER_ID, NODE_NAME, NODE_REGION
 cargo run --release
 ```
+
+## Operator CLI
+
+The same binary doubles as an operator CLI (`echo-node <command>`;
+with no arguments it runs the daemon in the foreground — the same as
+`cargo run`). For development, prefix any command with `cargo run --`.
+
+### Installation
+
+There is no packaged release yet — build from this repo:
+
+```bash
+# From the repo root (debug build is fine for trying things out)
+cargo build --release                 # → target/release/echo-node
+sudo cp target/release/echo-node /usr/local/bin/
+
+# …or install straight into $CARGO_HOME/bin (~/.cargo/bin)
+cargo install --path .
+```
+
+The crate is not published to crates.io, so `cargo install echo-node`
+won't work — always install from a checkout.
+
+**Keep the binary at a stable path.** `echo-node start` re-executes
+*itself* (`std::env::current_exe()`) as a detached background daemon
+(own session via `setsid`), so wherever the binary lives when you run
+`start` is where the daemon is launched from. If you run it from
+`target/release/` and later `cargo clean`, the next `start` fails —
+install to a PATH directory first. `stop`/`restart`/`status`/`logs` don't
+care (they use the pid file / config home / log file), but every future
+`start` goes through `current_exe()`.
+
+Upgrading: build the new binary, replace the installed copy, then
+`echo-node restart` (the running daemon keeps the old inode until
+restarted).
+
+CI also uploads `target/release/echo-node` as a build artifact named
+`echo-node-linux-amd64` on every push/PR
+(`.github/workflows/ci.yml`, kept 14 days), so you can grab a binary from
+the workflow run without building locally — but it's still just a bare
+binary you copy onto `PATH` yourself.
+
+**Architectures.** The CI artifact is **x86_64 (amd64) only** — it will not
+run on ARM machines. On anything else (Android/Termux, Raspberry Pi, ARM
+servers) build natively:
+
+```bash
+uname -m        # aarch64 → linux-arm64, x86_64 → linux-amd64, armv7l → linux-armv7
+cargo build --release          # → target/release/echo-node (host arch)
+```
+
+**Termux / Android notes:** there is no systemd, no root, and no
+`/usr/local/bin` — install to `$PREFIX/bin` (`~/../usr/bin`), run the daemon
+with `echo-node start` (the CLI-managed path: setsid + pid file), and skip
+the service account entirely. The roadmap for a one-command installer lives
+in [INSTALLER.md](INSTALLER.md).
+
+### Config home
+
+The CLI keeps all state in `$XDG_CONFIG_HOME/echomesh/` (fallback
+`~/.config/echomesh/`, override with `ECHOMESH_HOME`):
+
+| File | Contents |
+|------|----------|
+| `config.toml` | Node config (region, port, auto-bid, …) — see `config show` |
+| `identity.json` | Ed25519 + X25519 keypairs (permissions 0600) |
+| `state.db` | SQLite database |
+| `logs/daemon.log` | Daemon log output |
+| `daemon.pid` | Background daemon pid (written by `start`) |
+
+### Lifecycle
+
+```bash
+echo-node onboard              # 7-step resumable setup: identity → claim →
+                                 # join network → profile → marketplace → active
+echo-node onboard --status     # print current stage and exit
+echo-node onboard --reset      # rewind to the first stage
+echo-node onboard --offline    # skip network-dependent steps (dev machines)
+
+echo-node start                # spawn the daemon in the background
+echo-node start --region EU-FRA  # …and persist a region override
+echo-node status               # live snapshot (running, sessions, uptime, reputation)
+echo-node doctor               # diagnose: config home, identity perms,
+                                 # config parse, SQLite store, daemon reachability
+echo-node stop                 # SIGTERM via pid file
+echo-node restart              # stop + start
+```
+
+`start` launches the daemon with `LISTEN_ADDR=127.0.0.1:<port>` (port from
+`config.toml`, default `7777`) plus `SQLITE_DB` / `IDENTITY_PATH` pointed at
+the config home — the CLI's REST-backed subcommands assume that loopback
+address.
+
+### Marketplace
+
+```bash
+echo-node marketplace auctions      # open + recently closed auctions
+echo-node marketplace bid <id> --price 0.40   # sealed bid (USD/GB, ≤ budget cap)
+echo-node marketplace awards        # recent awards with locked (market) prices
+```
+
+### Money & identity
+
+```bash
+echo-node wallet                    # settlement totals + recent payouts
+echo-node identity                  # peer id, keys, provider id
+```
+
+`wallet` reads `GET /settlements`, which needs a Bearer token with the
+`settlements` scope when `API_KEYS`/`API_KEY` are set — the CLI prints a
+hint instead of a bare 401.
+
+### Logs & config
+
+```bash
+echo-node logs path                 # print the daemon log path
+echo-node logs tail -n 100          # last 100 lines
+echo-node logs tail --follow        # stream until Ctrl-C
+
+echo-node config show               # print path + every value
+echo-node config set region EU-FRA  # set one key (atomic write)
+```
+
+Settable keys: `region`, `port`, `max_upload_mbps`, `max_download_mbps`,
+`auto_start`, `backend_url`, `auto_bid`, `bid_price_usd_per_gb`,
+`onboard_stage`. Values are type-checked (port 1–65535, positive floats,
+booleans).
 
 ## API Endpoints
 
@@ -482,7 +613,9 @@ ECHO_NODE_TOKEN=<ingest_token> ./scripts/echo-sync.sh
 - Run it under a supervisor loop so transient outages self-heal:
   `while true; do ./scripts/echo-sync.sh; sleep 5; done`
 
-See `GAPS.md` for the full integration status.
+See [DASHBOARD.md](DASHBOARD.md) for the full picture: both integration
+paths (live forwarder vs the dormant native bridge), frame formats, the
+reliability spool, and the open roadmap.
 
 ## Environment Variables
 
@@ -514,6 +647,8 @@ See `GAPS.md` for the full integration status.
 | `DHT_NETWORK_ID` | `echo` | Namespaces the Kademlia protocol to `/<id>/kad/1.0.0` |
 | `ECHO_NETWORK` | `echomesh-devnet` | Network tag stamped into every canonical ledger event (`LedgerEvent.network`); lets nodes on different networks keep separate audit chains |
 | `DHT_LOCAL_ONLY` | `false` | `true` = no bootstrap (dev mode) |
+| `DHT_RELAY_MODE` | `auto` | libp2p circuit-relay role: `server`, `client`, or `auto` (= server if a public address is detected, else client) |
+| `DHT_RELAY_PEERS` | (unset) | Comma-separated relay multiaddrs for client mode (each ending `/p2p/<peer-id>`) |
 | `API_ADVERTISE_ADDR` | (unset) | Publicly reachable `http://host:port` base URL of this node's REST API, published inside DHT auction records so remote providers can submit signed bids. Falls back to the detected public IP + `LISTEN_ADDR` port; auction publishing is skipped until one is known. |
 | `RELAY_TARGET` | `127.0.0.1:80` | Target address for incoming tunnel relay |
 | `TUNNEL_ADDR` | `0.0.0.0:3002` | Tunnel listener bind address |
@@ -536,7 +671,7 @@ See `GAPS.md` for the full integration status.
 | `PROVIDER_ADDR` | (unset) | Provider's `TUNNEL_ADDR` — required in consumer mode |
 | `PROVIDER_PEER_ID` | (unset) | Provider's libp2p PeerId — required in consumer mode |
 | `PROVIDER_NOISE_PUBKEY` | (unset) | Provider's base64 X25519 Noise key for handshake pinning — required in consumer mode |
-| `DASHBOARD_TELEMETRY_URL` | (unset) | Dashboard telemetry ingestion endpoint (e.g. `https://<project>.supabase.co/functions/v1/report-telemetry`). With `ECHO_API_KEY`, enables the heartbeat → dashboard push (see `GAPS.md`) |
+| `DASHBOARD_TELEMETRY_URL` | (unset) | Dashboard telemetry ingestion endpoint (e.g. `https://<project>.supabase.co/functions/v1/report-telemetry`). With `ECHO_API_KEY`, enables the heartbeat → dashboard push (see `DASHBOARD.md`) |
 | `ECHO_API_KEY` | (unset) | API key for the dashboard telemetry bridge, sent as `Authorization: Bearer <key>` — required alongside `DASHBOARD_TELEMETRY_URL` to enable the bridge |
 | `DASHBOARD_TELEMETRY_SPOOL` | `data/telemetry_spool.jsonl` | Durable spool for frames that outlive a failed run; replayed on next boot |
 | `DASHBOARD_TELEMETRY_MAX_QUEUE` | `256` | In-memory frame queue cap (overflow drops oldest) |
@@ -574,25 +709,25 @@ Core tasks are gated on `NODE_MODE`: providers run the tunnel listener,
 capability publisher, and receipt settlement; consumers run a single forward
 listener instead (task 9).
 
-| # | Task | Line | Description |
-|---|------|------|-------------|
-| — | **Ledger writer** | 1608 (both modes) | `ledger.rs` — drains `LedgerWriter::try_emit` drafts in strict FIFO, advances the per-node sequence/prev-hash chain, signs + persists `ledger_events` (spawned before every other task) |
-| — | **Dashboard Reporter** | 1812 (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL` + `ECHO_API_KEY` are set |
-| — | **Public IP detection** | 2158 (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
-| — | **Auction sweeper** | 1714 | Every 2 s: finalizes expired auctions (Vickrey award or clean expiry) — the `bidding.rs` deadline sweep; emits `AuctionAwarded` to the ledger |
-| 1 | **Tunnel Event Handler** | 1827 | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service; emits `TunnelEstablished`/`TunnelTerminated` + `ReputationChanged` |
-| 2 | **Tunnel Listener** | 1952 (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
-| 3 | **Discovery Event Loop** | 2025 | Runs the libp2p swarm event loop; executes `DiscoveryCommand` (PutRecord/GetRecord/StartProviding/GetProviders) and emits the matching `DiscoveryEvent` results |
-| 4 | **Discovery Event Handler** | 2040 | Routes `PeerFound/PeerDisconnected` and, for G6, `auction/…` + `award/…` records into the foreign auction book / award log, chaining follow-up DHT lookups (index → auction); emits `PeerDiscovered` |
-| 5 | **Heartbeat** | 2175 | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
-| 6 | **Metric Cleanup** | 2182 | Removes metrics older than 30 days (daily) |
-| 7 | **Capability Publisher** | 2206 (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
-| 8 | **Receipt Settlement** | 2275 (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine`; looks up award-locked market prices (G6) before falling back to the flat rate; emits `UsageSnapshot` + `SettlementCreated`/`SettlementCompleted` |
-| 9 | **Consumer Listener** | `consumer.rs` (consumer only) | Accepts local app connections on `CONSUMER_LISTEN_ADDR`, dials the provider (`connect_to_provider`), relays app traffic through the Noise tunnel without issuing consumer receipts |
-| 10 | **Market DHT sync** | 2425 | (G6) Publishes this node's open-auction records + `auctions_by_host` index + region announce every 10s and pending award notices every 2s to Kademlia; skips publishing until an advertise API address (`API_ADVERTISE_ADDR` or detected public IP + port) is known |
-| — | **Marketplace auto-bid** | 2579 (`BID_AUTO=true`, provider) | Polls local `GET /auctions` **and** DHT-discovered remote auctions (exact region match), submitting bids — signed ed25519 payloads for remote hosts |
+| # | Task | Description |
+|---|------|-------------|
+| — | **Ledger writer** (both modes) | `ledger.rs` — drains `LedgerWriter::try_emit` drafts in strict FIFO, advances the per-node sequence/prev-hash chain, signs + persists `ledger_events` (spawned before every other task) |
+| — | **Dashboard Reporter** (opt-in) | `telemetry.rs` — non-blocking frames to `report-telemetry`; only spawned when `DASHBOARD_TELEMETRY_URL` + `ECHO_API_KEY` are set |
+| — | **Public IP detection** (one-shot) | Detects the node's public IP at startup; fills `ip_address` on `/metrics` |
+| — | **Auction sweeper** | Every 2 s: finalizes expired auctions (Vickrey award or clean expiry) — the `bidding.rs` deadline sweep; emits `AuctionAwarded` to the ledger |
+| 1 | **Tunnel Event Handler** | Processes `TunnelEvent::SessionEstablished/Closed` from the tunnel service; emits `TunnelEstablished`/`TunnelTerminated` + `ReputationChanged` |
+| 2 | **Tunnel Listener** (provider only) | Accepts incoming TCP connections on `TUNNEL_ADDR`, initiates Noise_XX handshake |
+| 3 | **Discovery Event Loop** | Runs the libp2p swarm event loop; executes `DiscoveryCommand` (PutRecord/GetRecord/StartProviding/GetProviders) and emits the matching `DiscoveryEvent` results |
+| 4 | **Discovery Event Handler** | Routes `PeerFound/PeerDisconnected` and, for G6, `auction/…` + `award/…` records into the foreign auction book / award log, chaining follow-up DHT lookups (index → auction); emits `PeerDiscovered` |
+| 5 | **Heartbeat** | Collects system metrics, measures latency/loss, upserts node record (every 10s) |
+| 6 | **Metric Cleanup** | Removes metrics older than 30 days (daily) |
+| 7 | **Capability Publisher** (provider only) | Publishes `CapabilityDescriptor` to DB for DHT discovery (every 60s) |
+| 8 | **Receipt Settlement** (provider only) | Verifies receipts from the metering channel, persists them, and accumulates idempotent USD payout rows via `SettlementEngine`; looks up award-locked market prices (G6) before falling back to the flat rate; emits `UsageSnapshot` + `SettlementCreated`/`SettlementCompleted` |
+| 9 | **Consumer Listener** (consumer only) | `consumer.rs` — accepts local app connections on `CONSUMER_LISTEN_ADDR`, dials the provider (`connect_to_provider`), relays app traffic through the Noise tunnel without issuing consumer receipts |
+| 10 | **Market DHT sync** | (G6) Publishes this node's open-auction records + `auctions_by_host` index + region announce every 10s and pending award notices every 2s to Kademlia; skips publishing until an advertise API address (`API_ADVERTISE_ADDR` or detected public IP + port) is known |
+| — | **Marketplace auto-bid** (`BID_AUTO=true`, provider) | Polls local `GET /auctions` **and** DHT-discovered remote auctions (exact region match), submitting bids — signed ed25519 payloads for remote hosts |
 
-Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call (line 2799).
+Additionally, the REST API (axum) and graceful shutdown are combined in a single `axum::serve(...).with_graceful_shutdown(shutdown_signal())` call.
 
 ## Consumer Mode Quick Start
 
@@ -666,7 +801,8 @@ sequenceDiagram
   winning provider imports it so **subsequent** receipts settle at the
   locked market price. Set `API_ADVERTISE_ADDR` so remote bidders can reach
   your REST API. Known limits (reachability, self-attested awards,
-  post-import repricing only, exact-region match) — see `GAPS.md` G6.
+  post-import repricing only, exact-region match) — see
+  [ARCHITECTURE.md](ARCHITECTURE.md) “Cross-Node Marketplace (G6)”.
 
 ## Architecture Decisions
 

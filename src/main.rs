@@ -2028,7 +2028,7 @@ async fn run_daemon() -> Result<()> {
                     //
                     // Slice 2 session federation: provider-side closes carry
                     // full accounting; push them to the dashboard so sessions
-                    // show real relays instead of seeded rows (see GAPS.md).
+                    // show real relays instead of seeded rows (see DASHBOARD.md).
                     if let (Some(reporter), Some(details)) = (&event_reporter, &details) {
                         let session_event = telemetry::SessionEvent::from_close(
                             &event_peer_id,
