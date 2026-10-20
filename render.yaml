@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: echo-node
+    runtime: docker
+    # Render builds from the Dockerfile in the repo root
+    dockerfilePath: ./Dockerfile
+    # Render sets $PORT; we map it to LISTEN_ADDR
+    # The app binds on 0.0.0.0:$PORT via the startCommand override below.
+    # Render health-checks the HTTP port automatically once the service is up.
+    healthCheckPath: /health
+    # Render free tier — upgrade to standard for persistent disk + more RAM
+    plan: free
+    envVars:
+      # Render injects PORT; we forward it into LISTEN_ADDR so the daemon
+      # binds on the right port. TUNNEL_ADDR is kept internal (not routed
+      # publicly by Render — use a TCP service or private network for that).
+      - key: LISTEN_ADDR
+        value: 0.0.0.0:10000   # Render free tier always routes to port 10000
+      - key: TUNNEL_ADDR
+        value: 0.0.0.0:3002
+      - key: IDENTITY_PATH
+        value: /home/echomesh/data/identity.json
+      - key: SQLITE_DB
+        value: sqlite:/home/echomesh/data/echo_node.db
+      - key: RUST_LOG
+        value: echo_daemon=info
+      - key: NODE_MODE
+        value: provider
+      - key: DHT_LOCAL_ONLY
+        value: "false"
+      - key: NODE_REGION
+        value: auto
+      # Secrets — set these via the Render dashboard or `render env set`:
+      # DATABASE_URL      — Neon/Postgres URL (leave unset to use SQLite)
+      # API_KEY           — Bearer token for /control + /settlements
+      # USER_ID           — your user identifier
+      # NODE_NAME         — display name for this node
