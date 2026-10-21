@@ -1,0 +1,53 @@
+# cargo-deny 0.20.x — supply-chain audit configuration.
+# Local verification: cargo deny check advisories licenses bans
+
+[graph]
+# Evaluate only the targets the daemon actually builds for.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+]
+
+[advisories]
+version = 2
+# Scope of unmaintained-advisory gating: only unmaintained *workspace*
+# crates fail the check; unmaintained transitive crates are reported as
+# warnings (real CVEs fail regardless of this knob).
+unmaintained = "workspace"
+yanked = "warn"
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "OpenSSL",
+    "MPL-2.0",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+
+# ring < 0.17 ships a LICENSE file without a machine-readable SPDX
+# expression; cargo-deny's gatherer hashes that file instead. Its actual
+# terms are ISC AND MIT AND OpenSSL (isn't diligence-these-days standard).
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+# Duplicate major versions = warn first (libp2p ecosystems commonly carry
+# a few); flip to "deny" once the tree is clean.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -76,11 +76,23 @@ jobs:
       - name: Run test suite (235 tests)
         run: cargo test -- --nocapture
 
+  deny:
+    name: cargo deny (advisories + licenses + bans)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pinned by SHA)
+
+      # Supply-chain gate over the resolved dependency graph (deny.toml):
+      # real CVEs fail; workspace-unmaintained crates fail; unmaintained
+      # transitive crates and duplicate versions warn.
+      - uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2 (pinned by SHA)
+
   build:
     name: cargo build (release)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [check, clippy, test]
+    needs: [check, clippy, test, deny]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pinned by SHA)
 

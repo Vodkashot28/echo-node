@@ -282,7 +282,11 @@ impl DiscoveryService {
                 noise::Config::new,
                 yamux::Config::default,
             )?
-            .with_quic()
+            // NOTE: QUIC transport deliberately omitted. The libp2p 0.54 QUIC
+            // stack (quirks: rcgen 0.11 + rustls-webpki 0.101) is the only
+            // root of the rustsec advisory set (ring 0.16 / webpki 0.101) in
+            // our tree, and TCP + relay already covers all operator paths.
+            // Revisit when libp2p is upgraded past 0.54.
             .with_relay_client(noise::Config::new, yamux::Config::default)?
             .with_behaviour(|key, relay_client| {
                 let peer_id = key.public().to_peer_id();

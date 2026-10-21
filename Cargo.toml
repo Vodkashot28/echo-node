@@ -4,6 +4,9 @@ version = "0.3.0"
 edition = "2021"
 # Docker base image (Dockerfile) carries Rust ≥1.88 — required by the lockfile.
 rust-version = "1.88"
+# NOTE: previously unset (cargo-deny flagged the crate unlicensed).
+# Dual OSI-standard license; adjust if you prefer a different stance.
+license = "MIT OR Apache-2.0"
 
 # Operator-facing binary name — canonical across clap (`--help`/`--version`),
 # release artifacts, the installer, and the docs. The package name above stays
@@ -26,7 +29,7 @@ futures = "0.3"
 
 # libp2p core + transports + protocols
 libp2p = { version = "0.54", features = [
-    "tokio", "noise", "yamux", "tcp", "quic", "identify",
+    "tokio", "noise", "yamux", "tcp", "identify",
     "kad", "macros", "relay", "dcutr", "autonat"
 ] }
 libp2p-identity = { version = "0.2", features = ["ed25519", "rand"] }
