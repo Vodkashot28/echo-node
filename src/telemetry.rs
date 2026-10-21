@@ -494,8 +494,18 @@ impl DashboardReporter {
 
             let max_queue = task_config.max_queue.max(1);
 
-            // Replay anything a previous shutdown spooled to disk.
-            let mut queue = load_spool(&task_config.spool_path, max_queue);
+            // Replay anything a previous shutdown spooled to disk. The file
+            // read + per-line JSON parse run on the blocking pool; a task
+            // join failure starts with an empty queue instead of wedging
+            // the reporter.
+            let spool_for_load = task_config.spool_path.clone();
+            let mut queue =
+                tokio::task::spawn_blocking(move || load_spool(&spool_for_load, max_queue))
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!(error = %e, "telemetry spool replay task failed; starting empty");
+                        VecDeque::new()
+                    });
             if !queue.is_empty() {
                 info!(
                     count = queue.len(),
@@ -523,7 +533,20 @@ impl DashboardReporter {
                         if queue.is_empty() {
                             clear_spool(&task_config.spool_path);
                         } else {
-                            match save_spool(&task_config.spool_path, &queue) {
+                            // Spool write does temp-file + fsync + rename —
+                            // keep it off the async executor. SpoolRecord is
+                            // Clone; a join failure degrades to Err so the
+                            // warning path still runs.
+                            let spool_for_save = task_config.spool_path.clone();
+                            let records = queue.clone();
+                            let spool_result = tokio::task::spawn_blocking(move || {
+                                save_spool(&spool_for_save, &records)
+                            })
+                            .await
+                            .unwrap_or_else(|e| {
+                                Err(anyhow::anyhow!("spool write task join failed: {e}"))
+                            });
+                            match spool_result {
                                 Ok(()) => info!(
                                     count = queue.len(),
                                     path = %task_config.spool_path.display(),

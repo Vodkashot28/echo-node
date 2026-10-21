@@ -747,11 +747,28 @@ async fn heartbeat(
         //          held while waiting on `availability`.
         //          Uses refresh_and_compute() for a single sysinfo refresh
         //          instead of two separate refreshes.
+        //          refresh_and_compute() performs a synchronous sysinfo
+        //          refresh (tens of ms), so it runs on the blocking pool to
+        //          keep the async executor from stalling every heartbeat.
+        //          `Handle::block_on` is legal inside a spawn_blocking
+        //          callback (it is not an async context); the engine write
+        //          lock is held only for the short engine update — never
+        //          across the state lock (contract unchanged).
         let (stats, avail_upload, avail_download, cpu_temp_c) = {
-            let mut avail = availability.write().await;
-            let (stats, up, down) = avail.refresh_and_compute();
-            let temp = avail.cpu_temp_c();
-            (stats, up, down, temp)
+            let availability = Arc::clone(&availability);
+            tokio::task::spawn_blocking(move || {
+                tokio::runtime::Handle::current().block_on(async {
+                    let mut avail = availability.write().await;
+                    let (stats, up, down) = avail.refresh_and_compute();
+                    let temp = avail.cpu_temp_c();
+                    (stats, up, down, temp)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                error!(error = %e, "sysinfo refresh task failed; heartbeat uses zeroed stats");
+                (echo_daemon::SystemStats::default(), 0.0, 0.0, None)
+            })
         };
 
         let cpu_pct = stats.cpu_pct;

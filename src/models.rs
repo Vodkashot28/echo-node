@@ -262,7 +262,7 @@ pub struct CapabilityDescriptor {
 // System metrics snapshot (produced by availability engine)
 // ──────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SystemStats {
     pub cpu_pct: f64,
     pub memory_pct: f64,

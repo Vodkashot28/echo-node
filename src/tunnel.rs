@@ -265,8 +265,18 @@ impl TunnelService {
         };
 
         // 3. Send session_id + local peer_id + optional ticket (plaintext, before Noise handshake).
-        // Load a previously-received ticket for this provider from disk (if any).
-        let stored_ticket = load_ticket_from_disk(&remote_peer_id.to_string());
+        // Load a previously-received ticket for this provider from disk (if
+        // any). The file read + validity pre-check run on the blocking pool
+        // so the dial path never stalls the async executor on disk I/O.
+        let stored_ticket = {
+            let peer = remote_peer_id.to_string();
+            tokio::task::spawn_blocking(move || load_ticket_from_disk(&peer))
+                .await
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "ticket load task failed; dialing without a stored ticket");
+                    None
+                })
+        };
         send_preamble(
             &mut stream,
             session_id,
@@ -375,7 +385,15 @@ impl TunnelService {
                 Ok(frame) if !frame.is_empty() && frame[0] == 0x01 => {
                     let ticket_bytes = &frame[1..];
                     if !ticket_bytes.is_empty() {
-                        persist_ticket_to_disk(&remote_peer_id.to_string(), ticket_bytes);
+                        // Persist off the executor: the file write can stall
+                        // on a busy disk, and this runs inside the consumer
+                        // handshake path. The helper logs its own I/O errors.
+                        let peer = remote_peer_id.to_string();
+                        let bytes = ticket_bytes.to_vec();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            persist_ticket_to_disk(&peer, &bytes)
+                        })
+                        .await;
                         info!(session = session_id, "session ticket received and stored");
                     }
                 }
