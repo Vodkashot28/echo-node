@@ -262,6 +262,39 @@ pub struct CapabilityDescriptor {
 // System metrics snapshot (produced by availability engine)
 // ──────────────────────────────────────────────────────────────
 
+/// A persisted marketplace auction — typed mirror of the `auctions`
+/// table (migration 006). Replaces the former `serde_json::Value` blob
+/// returned by the auction getters in `MetricsBackend`, so row shape
+/// drift now fails at compile time instead of in a runtime parse.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuctionRow {
+    pub auction_id: String,
+    pub requester_peer_id: String,
+    pub region: String,
+    pub bandwidth_mbps: f64,
+    pub budget_usd_per_gb: f64,
+    pub window_secs: i64,
+    pub created_at: i64,
+    pub closes_at: i64,
+    pub status: String,
+    /// Present once the auction reaches `awarded` status.
+    pub winning_peer_id: Option<String>,
+    pub winning_price: Option<f64>,
+    pub awarded_at: Option<i64>,
+}
+
+/// A persisted sealed bid — typed mirror of the `auction_bids` table.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BidRow {
+    pub bid_id: String,
+    pub auction_id: String,
+    pub provider_peer_id: String,
+    pub price_usd_per_gb: f64,
+    pub reputation_score: f64,
+    pub avg_latency_ms: f64,
+    pub submitted_at: i64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SystemStats {
     pub cpu_pct: f64,

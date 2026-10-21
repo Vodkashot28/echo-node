@@ -753,7 +753,7 @@ impl MetricsBackend for NeonStore {
         Ok(())
     }
 
-    async fn get_auction(&self, auction_id: &str) -> Result<Option<serde_json::Value>> {
+    async fn get_auction(&self, auction_id: &str) -> Result<Option<AuctionRow>> {
         let row: Option<(String, String, String, f64, f64, i32, i64, i64, String, Option<String>, Option<f64>, Option<i64>)> = sqlx::query_as(
             "SELECT auction_id, requester_peer_id, region, bandwidth_mbps, budget_usd_per_gb,
                     window_secs, created_at, closes_at, status, winning_peer_id, winning_price, awarded_at
@@ -764,25 +764,23 @@ impl MetricsBackend for NeonStore {
         .await
         .context("neon get auction")?;
 
-        Ok(row.map(|r| {
-            serde_json::json!({
-                "auction_id": r.0,
-                "requester_peer_id": r.1,
-                "region": r.2,
-                "bandwidth_mbps": r.3,
-                "budget_usd_per_gb": r.4,
-                "window_secs": r.5,
-                "created_at": r.6,
-                "closes_at": r.7,
-                "status": r.8,
-                "winning_peer_id": r.9,
-                "winning_price": r.10,
-                "awarded_at": r.11,
-            })
+        Ok(row.map(|r| AuctionRow {
+            auction_id: r.0,
+            requester_peer_id: r.1,
+            region: r.2,
+            bandwidth_mbps: r.3,
+            budget_usd_per_gb: r.4,
+            window_secs: i64::from(r.5),
+            created_at: r.6,
+            closes_at: r.7,
+            status: r.8,
+            winning_peer_id: r.9,
+            winning_price: r.10,
+            awarded_at: r.11,
         }))
     }
 
-    async fn list_auctions(&self, status: &str, limit: i64) -> Result<Vec<serde_json::Value>> {
+    async fn list_auctions(&self, status: &str, limit: i64) -> Result<Vec<AuctionRow>> {
         let rows: Vec<(String, String, String, f64, f64, i32, i64, i64, String, Option<String>, Option<f64>, Option<i64>)> = sqlx::query_as(
             "SELECT auction_id, requester_peer_id, region, bandwidth_mbps, budget_usd_per_gb,
                     window_secs, created_at, closes_at, status, winning_peer_id, winning_price, awarded_at
@@ -796,21 +794,19 @@ impl MetricsBackend for NeonStore {
 
         Ok(rows
             .into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "auction_id": r.0,
-                    "requester_peer_id": r.1,
-                    "region": r.2,
-                    "bandwidth_mbps": r.3,
-                    "budget_usd_per_gb": r.4,
-                    "window_secs": r.5,
-                    "created_at": r.6,
-                    "closes_at": r.7,
-                    "status": r.8,
-                    "winning_peer_id": r.9,
-                    "winning_price": r.10,
-                    "awarded_at": r.11,
-                })
+            .map(|r| AuctionRow {
+                auction_id: r.0,
+                requester_peer_id: r.1,
+                region: r.2,
+                bandwidth_mbps: r.3,
+                budget_usd_per_gb: r.4,
+                window_secs: i64::from(r.5),
+                created_at: r.6,
+                closes_at: r.7,
+                status: r.8,
+                winning_peer_id: r.9,
+                winning_price: r.10,
+                awarded_at: r.11,
             })
             .collect())
     }
@@ -872,9 +868,9 @@ impl MetricsBackend for NeonStore {
         Ok(())
     }
 
-    async fn get_bids_for_auction(&self, auction_id: &str) -> Result<Vec<serde_json::Value>> {
+    async fn get_bids_for_auction(&self, auction_id: &str) -> Result<Vec<BidRow>> {
         let rows: Vec<(String, String, String, f64, f64, f64, i64)> = sqlx::query_as(
-            "SELECT bid_id, auction_id, provider_peer_id, price_usd_per_gb, 
+            "SELECT bid_id, auction_id, provider_peer_id, price_usd_per_gb,
                     reputation_score, avg_latency_ms, submitted_at
              FROM auction_bids WHERE auction_id = $1 ORDER BY submitted_at ASC",
         )
@@ -885,16 +881,14 @@ impl MetricsBackend for NeonStore {
 
         Ok(rows
             .into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "bid_id": r.0,
-                    "auction_id": r.1,
-                    "provider_peer_id": r.2,
-                    "price_usd_per_gb": r.3,
-                    "reputation_score": r.4,
-                    "avg_latency_ms": r.5,
-                    "submitted_at": r.6,
-                })
+            .map(|r| BidRow {
+                bid_id: r.0,
+                auction_id: r.1,
+                provider_peer_id: r.2,
+                price_usd_per_gb: r.3,
+                reputation_score: r.4,
+                avg_latency_ms: r.5,
+                submitted_at: r.6,
             })
             .collect())
     }

@@ -196,10 +196,10 @@ pub trait MetricsBackend: Send + Sync {
     ) -> Result<()>;
 
     /// Get an auction by ID
-    async fn get_auction(&self, auction_id: &str) -> Result<Option<serde_json::Value>>;
+    async fn get_auction(&self, auction_id: &str) -> Result<Option<AuctionRow>>;
 
     /// List all auctions matching a status
-    async fn list_auctions(&self, status: &str, limit: i64) -> Result<Vec<serde_json::Value>>;
+    async fn list_auctions(&self, status: &str, limit: i64) -> Result<Vec<AuctionRow>>;
 
     /// Update auction status (open -> closed/cancelled)
     async fn update_auction_status(
@@ -225,7 +225,7 @@ pub trait MetricsBackend: Send + Sync {
     ) -> Result<()>;
 
     /// Get all bids for an auction
-    async fn get_bids_for_auction(&self, auction_id: &str) -> Result<Vec<serde_json::Value>>;
+    async fn get_bids_for_auction(&self, auction_id: &str) -> Result<Vec<BidRow>>;
 
     /// Delete auctions older than specified timestamp (cleanup)
     async fn cleanup_old_auctions(&self, older_than: i64) -> Result<u64>;

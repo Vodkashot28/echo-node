@@ -179,11 +179,11 @@ async fn auction_upsert_and_retrieve() {
     assert!(auction.is_some(), "auction should exist");
 
     let auction = auction.unwrap();
-    assert_eq!(auction["auction_id"], auction_id);
-    assert_eq!(auction["region"], "us-west");
-    assert_eq!(auction["bandwidth_mbps"], 100.0);
-    assert_eq!(auction["budget_usd_per_gb"], 0.50);
-    assert_eq!(auction["status"], "open");
+    assert_eq!(auction.auction_id, auction_id);
+    assert_eq!(auction.region, "us-west");
+    assert_eq!(auction.bandwidth_mbps, 100.0);
+    assert_eq!(auction.budget_usd_per_gb, 0.50);
+    assert_eq!(auction.status, "open");
 }
 
 #[tokio::test]
@@ -260,9 +260,9 @@ async fn auction_update_status_with_winner() {
 
     // Verify status updated
     let auction = backend.get_auction(auction_id).await.unwrap().unwrap();
-    assert_eq!(auction["status"], "awarded");
-    assert_eq!(auction["winning_peer_id"], "winner-peer-id");
-    assert_eq!(auction["winning_price"], 0.55);
+    assert_eq!(auction.status, "awarded");
+    assert_eq!(auction.winning_peer_id.as_deref(), Some("winner-peer-id"));
+    assert_eq!(auction.winning_price, Some(0.55));
 }
 
 #[tokio::test]
@@ -311,14 +311,14 @@ async fn auction_bids_insert_and_retrieve() {
     assert_eq!(bids.len(), 3, "should have 3 bids");
 
     // Verify bids are ordered by submitted_at
-    assert_eq!(bids[0]["provider_peer_id"], "provider-0");
-    assert_eq!(bids[1]["provider_peer_id"], "provider-1");
-    assert_eq!(bids[2]["provider_peer_id"], "provider-2");
+    assert_eq!(bids[0].provider_peer_id, "provider-0");
+    assert_eq!(bids[1].provider_peer_id, "provider-1");
+    assert_eq!(bids[2].provider_peer_id, "provider-2");
 
     // Verify prices
-    assert_eq!(bids[0]["price_usd_per_gb"], 0.50);
-    assert_eq!(bids[1]["price_usd_per_gb"], 0.45);
-    assert_eq!(bids[2]["price_usd_per_gb"], 0.40);
+    assert_eq!(bids[0].price_usd_per_gb, 0.50);
+    assert_eq!(bids[1].price_usd_per_gb, 0.45);
+    assert_eq!(bids[2].price_usd_per_gb, 0.40);
 }
 
 #[tokio::test]
@@ -362,10 +362,7 @@ async fn auction_bid_upsert_per_provider() {
     // Verify only one bid exists with latest price
     let bids = backend.get_bids_for_auction(auction_id).await.unwrap();
     assert_eq!(bids.len(), 1, "should have only 1 bid per provider");
-    assert_eq!(
-        bids[0]["price_usd_per_gb"], 0.70,
-        "should have latest price"
-    );
+    assert_eq!(bids[0].price_usd_per_gb, 0.70, "should have latest price");
 }
 
 #[tokio::test]
@@ -545,8 +542,8 @@ async fn auction_crash_recovery_scenario() {
         assert!(auction.is_some(), "auction should survive crash");
 
         let auction = auction.unwrap();
-        assert_eq!(auction["status"], "open");
-        assert_eq!(auction["bandwidth_mbps"], 100.0);
+        assert_eq!(auction.status, "open");
+        assert_eq!(auction.bandwidth_mbps, 100.0);
 
         // Verify bids recovered
         let bids = backend.get_bids_for_auction(auction_id).await.unwrap();
@@ -555,15 +552,15 @@ async fn auction_crash_recovery_scenario() {
         // Verify bid details
         let provider_a_bid = bids
             .iter()
-            .find(|b| b["provider_peer_id"] == "provider-a")
+            .find(|b| b.provider_peer_id == "provider-a")
             .unwrap();
-        assert_eq!(provider_a_bid["price_usd_per_gb"], 0.45);
+        assert_eq!(provider_a_bid.price_usd_per_gb, 0.45);
 
         let provider_b_bid = bids
             .iter()
-            .find(|b| b["provider_peer_id"] == "provider-b")
+            .find(|b| b.provider_peer_id == "provider-b")
             .unwrap();
-        assert_eq!(provider_b_bid["price_usd_per_gb"], 0.48);
+        assert_eq!(provider_b_bid.price_usd_per_gb, 0.48);
     }
 }
 
