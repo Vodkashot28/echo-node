@@ -2,6 +2,8 @@
 name = "echo-daemon"
 version = "0.3.0"
 edition = "2021"
+# Docker base image (Dockerfile) carries Rust ≥1.88 — required by the lockfile.
+rust-version = "1.88"
 
 # Operator-facing binary name — canonical across clap (`--help`/`--version`),
 # release artifacts, the installer, and the docs. The package name above stays
@@ -15,7 +17,6 @@ path = "src/main.rs"
 tokio = { version = "1.36", features = ["rt-multi-thread", "net", "time", "macros", "signal", "io-util", "sync"] }
 axum = { version = "0.7", default-features = false, features = ["json", "tokio", "http1"] }
 tower-http = { version = "0.5", default-features = false, features = ["cors"] }
-tower = { version = "0.5" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
@@ -25,10 +26,10 @@ futures = "0.3"
 
 # libp2p core + transports + protocols
 libp2p = { version = "0.54", features = [
-    "tokio", "noise", "yamux", "tcp", "quic", "ping", "identify",
-    "kad", "macros", "secp256k1", "relay", "dcutr", "autonat"
+    "tokio", "noise", "yamux", "tcp", "quic", "identify",
+    "kad", "macros", "relay", "dcutr", "autonat"
 ] }
-libp2p-identity = { version = "0.2", features = ["secp256k1", "ed25519", "rand"] }
+libp2p-identity = { version = "0.2", features = ["ed25519", "rand"] }
 
 # Cryptography
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
@@ -37,13 +38,13 @@ rand = "0.8"
 
 # System
 sysinfo = "0.30"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = "0.4"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.5", features = ["derive"] }
 directories = "5.0"
 indicatif = "0.17"
 toml = "0.8"

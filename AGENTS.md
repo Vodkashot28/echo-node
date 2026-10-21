@@ -7,7 +7,7 @@ Single Rust crate (package `echo-daemon`, binary `echo-node` via `[[bin]]` in Ca
 ```sh
 cargo check                       # type-check only (fast)
 cargo clippy --all-targets        # lint
-cargo test                        # 230 tests (161 lib, 30 main, 4 bidding e2e, 16 integration, 12 p0_fixes, 4 tunnel e2e, 2 dht market e2e, 1 consumer e2e)
+cargo test                        # 235 tests (161 lib, 25 main, 10 cli, 4 bidding e2e, 16 integration, 12 p0_fixes, 4 tunnel e2e, 2 dht market e2e, 1 consumer e2e)
 cargo build                       # compile
 ```
 
@@ -121,7 +121,7 @@ and off by default. Run it under a `while true` supervisor loop. See
 
 ## Testing
 
-- `src/` has pure unit tests (191 total: 161 lib + 30 in `main.rs` — lib breakdown: bidding 29, meter 22, policy 15, availability 15, telemetry 13, security 11, ledger 9, migrator 8, auth 8, session_ticket 5, accountability 6, models 6, discovery 5, tunnel 4, identity 4, settlement 1). No external services required.
+- `src/` has pure unit tests (196 total: 161 lib + 25 in `main.rs` + 10 in `src/cli/*` — lib breakdown: bidding 29, meter 22, policy 15, availability 15, telemetry 13, security 11, ledger 9, migrator 8, auth 8, session_ticket 5, accountability 6, models 6, discovery 5, tunnel 4, identity 4, settlement 1). No external services required.
 - `tests/integration.rs` has 16 tests against a real SQLite store (tempfile-based): migration lifecycle, CRUD, concurrency, identity persistence, receipt round-trips, settlement, and a full ledger-writer round trip (append 3 + restart + resume at sequence 4, hash-chain links, `verify_event` on every row).
 - `tests/bidding_e2e.rs` has 4 tests covering the market pipeline: auction → sealed bids → deadline sweep → Vickrey award → settlement at the locked price (vs flat-rate fallback), budget-cap/requester guards, clean no-bid expiry, pricing-rule parsing.
 - `tests/dht_market_e2e.rs` has 2 tests running two in-process libp2p swarms (local-only, unique `network_id` per run): an auction record (index + record) propagates host→peer over Kademlia, and an award record reaches the winning provider. No external network required.

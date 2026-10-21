@@ -73,7 +73,7 @@ jobs:
       - name: Create data directories
         run: mkdir -p data/tickets
 
-      - name: Run test suite (230 tests)
+      - name: Run test suite (235 tests)
         run: cargo test -- --nocapture
 
   build:
