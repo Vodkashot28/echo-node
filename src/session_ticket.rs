@@ -73,9 +73,8 @@ impl SessionTicket {
         let expires_at = now + TICKET_VALIDITY_SECS;
 
         // Serialize and encrypt the state
-        let state_json = serde_json::to_vec(&state)
-            .context("failed to serialize session state")?;
-        
+        let state_json = serde_json::to_vec(&state).context("failed to serialize session state")?;
+
         // Simple XOR encryption with provider's Noise key (good enough for
         // non-adversarial resumption; full AES-GCM would be better but adds deps)
         let noise_key = identity.noise_secret_key_bytes();
@@ -121,7 +120,7 @@ impl SessionTicket {
             .duration_since(UNIX_EPOCH)
             .context("system time before UNIX_EPOCH")?
             .as_secs();
-        
+
         if now >= self.expires_at {
             bail!("ticket expired");
         }
@@ -139,25 +138,25 @@ impl SessionTicket {
         // Verify signature
         let message = self.signable_message();
         let signature = crate::base64_decode(&self.signature);
-        
-        identity.verify(message.as_bytes(), &signature)
+
+        identity
+            .verify(message.as_bytes(), &signature)
             .context("invalid ticket signature")?;
 
         // Decrypt state
         let noise_key = identity.noise_secret_key_bytes();
         let state_json = xor_encrypt(&self.encrypted_state, noise_key);
-        
-        let state: SessionState = serde_json::from_slice(&state_json)
-            .context("failed to deserialize session state")?;
+
+        let state: SessionState =
+            serde_json::from_slice(&state_json).context("failed to deserialize session state")?;
 
         Ok(state)
     }
 
     /// Serialize ticket for transmission (consumer stores this)
     pub fn serialize(&self) -> Result<Vec<u8>> {
-        let bytes = serde_json::to_vec(self)
-            .context("failed to serialize ticket")?;
-        
+        let bytes = serde_json::to_vec(self).context("failed to serialize ticket")?;
+
         if bytes.len() > MAX_TICKET_SIZE {
             bail!("ticket too large: {} bytes", bytes.len());
         }
@@ -171,8 +170,7 @@ impl SessionTicket {
             bail!("ticket too large: {} bytes", bytes.len());
         }
 
-        let ticket: Self = serde_json::from_slice(bytes)
-            .context("failed to deserialize ticket")?;
+        let ticket: Self = serde_json::from_slice(bytes).context("failed to deserialize ticket")?;
 
         Ok(ticket)
     }
@@ -196,7 +194,7 @@ impl SessionTicket {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        
+
         now >= self.expires_at
     }
 }
@@ -226,7 +224,7 @@ mod tests {
     fn ticket_issue_and_verify_roundtrip() {
         let identity = test_identity();
         let consumer_peer_id = "12D3KooWConsumer".to_string();
-        
+
         let state = SessionState {
             encryption_key: vec![1u8; 32],
             decryption_key: vec![2u8; 32],
@@ -246,7 +244,9 @@ mod tests {
         .unwrap();
 
         // Verify and decrypt
-        let decrypted = ticket.verify_and_decrypt(&identity, &consumer_peer_id).unwrap();
+        let decrypted = ticket
+            .verify_and_decrypt(&identity, &consumer_peer_id)
+            .unwrap();
 
         assert_eq!(decrypted.send_sequence, 42);
         assert_eq!(decrypted.recv_sequence, 43);
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn ticket_rejects_wrong_consumer() {
         let identity = test_identity();
-        
+
         let state = SessionState {
             encryption_key: vec![1u8; 32],
             decryption_key: vec![2u8; 32],
@@ -285,7 +285,7 @@ mod tests {
     fn ticket_rejects_wrong_provider() {
         let identity1 = test_identity();
         let identity2 = test_identity();
-        
+
         let state = SessionState {
             encryption_key: vec![1u8; 32],
             decryption_key: vec![2u8; 32],
@@ -296,18 +296,27 @@ mod tests {
         };
 
         let consumer = "12D3KooWConsumer".to_string();
-        let ticket = SessionTicket::issue(&identity1, "session-123".to_string(), consumer.clone(), state).unwrap();
+        let ticket = SessionTicket::issue(
+            &identity1,
+            "session-123".to_string(),
+            consumer.clone(),
+            state,
+        )
+        .unwrap();
 
         // Try to verify with different provider identity
         let result = ticket.verify_and_decrypt(&identity2, &consumer);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("different provider"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("different provider"));
     }
 
     #[test]
     fn ticket_serialize_deserialize_roundtrip() {
         let identity = test_identity();
-        
+
         let state = SessionState {
             encryption_key: vec![1u8; 32],
             decryption_key: vec![2u8; 32],
@@ -336,10 +345,10 @@ mod tests {
     fn xor_encrypt_is_symmetric() {
         let data = b"Hello, World!";
         let key = b"secret_key_12345";
-        
+
         let encrypted = xor_encrypt(data, key);
         assert_ne!(&encrypted[..], data);
-        
+
         let decrypted = xor_encrypt(&encrypted, key);
         assert_eq!(&decrypted[..], data);
     }

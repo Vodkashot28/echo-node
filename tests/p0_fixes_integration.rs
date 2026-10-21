@@ -3,9 +3,9 @@
 // - Auction state persistence and crash recovery
 // - Relay peer configuration parsing
 
-use echo_daemon::{MetricsBackend, SqliteStore};
-use echo_daemon::session_ticket::{SessionState, SessionTicket};
 use echo_daemon::identity::NodeIdentity;
+use echo_daemon::session_ticket::{SessionState, SessionTicket};
+use echo_daemon::{MetricsBackend, SqliteStore};
 use tempfile::NamedTempFile;
 
 fn temp_identity_path() -> NamedTempFile {
@@ -30,7 +30,7 @@ async fn session_ticket_store_and_retrieve() {
     let identity = test_identity();
     let session_id = "session-123";
     let consumer_peer_id = "12D3KooWConsumer";
-    
+
     let state = SessionState {
         encryption_key: vec![1u8; 32],
         decryption_key: vec![2u8; 32],
@@ -51,7 +51,12 @@ async fn session_ticket_store_and_retrieve() {
 
     let ticket_data = ticket.serialize().unwrap();
     backend
-        .store_session_ticket(session_id, consumer_peer_id, &ticket_data, ticket.expires_at as i64)
+        .store_session_ticket(
+            session_id,
+            consumer_peer_id,
+            &ticket_data,
+            ticket.expires_at as i64,
+        )
         .await
         .unwrap();
 
@@ -83,7 +88,7 @@ async fn session_ticket_cleanup_expired() {
     let backend = SqliteStore::new(&db_url).await.unwrap();
 
     let now = chrono::Utc::now().timestamp();
-    
+
     // Store expired ticket
     backend
         .store_session_ticket("expired-session", "peer1", b"data1", now - 3600)
@@ -132,7 +137,11 @@ async fn session_ticket_upsert_overwrites() {
         .unwrap();
 
     // Verify only latest ticket exists
-    let retrieved = backend.get_session_ticket(session_id).await.unwrap().unwrap();
+    let retrieved = backend
+        .get_session_ticket(session_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(&retrieved, b"data-v2", "should have latest ticket data");
 }
 
@@ -324,7 +333,17 @@ async fn auction_bid_upsert_per_provider() {
 
     // Create auction
     backend
-        .upsert_auction(auction_id, "req", "region", 100.0, 1.0, 30, now, now + 30, "open")
+        .upsert_auction(
+            auction_id,
+            "req",
+            "region",
+            100.0,
+            1.0,
+            30,
+            now,
+            now + 30,
+            "open",
+        )
         .await
         .unwrap();
 
@@ -343,7 +362,10 @@ async fn auction_bid_upsert_per_provider() {
     // Verify only one bid exists with latest price
     let bids = backend.get_bids_for_auction(auction_id).await.unwrap();
     assert_eq!(bids.len(), 1, "should have only 1 bid per provider");
-    assert_eq!(bids[0]["price_usd_per_gb"], 0.70, "should have latest price");
+    assert_eq!(
+        bids[0]["price_usd_per_gb"], 0.70,
+        "should have latest price"
+    );
 }
 
 #[tokio::test]
@@ -357,17 +379,43 @@ async fn auction_cleanup_old_closed() {
 
     // Create old awarded auction (should be cleaned)
     backend
-        .upsert_auction("old-awarded", "req", "region", 100.0, 1.0, 30, old, old + 30, "open")
+        .upsert_auction(
+            "old-awarded",
+            "req",
+            "region",
+            100.0,
+            1.0,
+            30,
+            old,
+            old + 30,
+            "open",
+        )
         .await
         .unwrap();
     backend
-        .update_auction_status("old-awarded", "awarded", Some("provider-1"), Some(0.5), Some(old + 25))
+        .update_auction_status(
+            "old-awarded",
+            "awarded",
+            Some("provider-1"),
+            Some(0.5),
+            Some(old + 25),
+        )
         .await
         .unwrap();
 
     // Create old cancelled auction (should be cleaned)
     backend
-        .upsert_auction("old-cancelled", "req", "region", 100.0, 1.0, 30, old, old + 30, "open")
+        .upsert_auction(
+            "old-cancelled",
+            "req",
+            "region",
+            100.0,
+            1.0,
+            30,
+            old,
+            old + 30,
+            "open",
+        )
         .await
         .unwrap();
     backend
@@ -377,32 +425,67 @@ async fn auction_cleanup_old_closed() {
 
     // Create recent awarded auction (should not be cleaned)
     backend
-        .upsert_auction("recent-awarded", "req", "region", 100.0, 1.0, 30, now - 100, now - 70, "open")
+        .upsert_auction(
+            "recent-awarded",
+            "req",
+            "region",
+            100.0,
+            1.0,
+            30,
+            now - 100,
+            now - 70,
+            "open",
+        )
         .await
         .unwrap();
     backend
-        .update_auction_status("recent-awarded", "awarded", Some("provider-1"), Some(0.5), Some(now - 75))
+        .update_auction_status(
+            "recent-awarded",
+            "awarded",
+            Some("provider-1"),
+            Some(0.5),
+            Some(now - 75),
+        )
         .await
         .unwrap();
 
     // Create old open auction (should not be cleaned — still active)
     backend
-        .upsert_auction("old-open", "req", "region", 100.0, 1.0, 30, old, old + 30, "open")
+        .upsert_auction(
+            "old-open",
+            "req",
+            "region",
+            100.0,
+            1.0,
+            30,
+            old,
+            old + 30,
+            "open",
+        )
         .await
         .unwrap();
 
     // Cleanup auctions older than 7 days
     let threshold = now - (86400 * 7);
     let cleaned = backend.cleanup_old_auctions(threshold).await.unwrap();
-    assert_eq!(cleaned, 2, "should clean up 2 old terminal auctions (awarded + cancelled)");
+    assert_eq!(
+        cleaned, 2,
+        "should clean up 2 old terminal auctions (awarded + cancelled)"
+    );
 
     // Verify old awarded is gone
     let old_awarded = backend.get_auction("old-awarded").await.unwrap();
-    assert!(old_awarded.is_none(), "old awarded auction should be removed");
+    assert!(
+        old_awarded.is_none(),
+        "old awarded auction should be removed"
+    );
 
     // Verify old cancelled is gone
     let old_cancelled = backend.get_auction("old-cancelled").await.unwrap();
-    assert!(old_cancelled.is_none(), "old cancelled auction should be removed");
+    assert!(
+        old_cancelled.is_none(),
+        "old cancelled auction should be removed"
+    );
 
     // Verify recent awarded remains
     let recent = backend.get_auction("recent-awarded").await.unwrap();
@@ -417,16 +500,26 @@ async fn auction_cleanup_old_closed() {
 async fn auction_crash_recovery_scenario() {
     let db_file = NamedTempFile::new().unwrap();
     let db_url = format!("sqlite:{}", db_file.path().display());
-    
+
     let auction_id = "crash-test-auction";
     let now = chrono::Utc::now().timestamp();
 
     // Simulate pre-crash: create auction with bids
     {
         let backend = SqliteStore::new(&db_url).await.unwrap();
-        
+
         backend
-            .upsert_auction(auction_id, "requester", "us-east", 100.0, 0.50, 30, now, now + 30, "open")
+            .upsert_auction(
+                auction_id,
+                "requester",
+                "us-east",
+                100.0,
+                0.50,
+                30,
+                now,
+                now + 30,
+                "open",
+            )
             .await
             .unwrap();
 
@@ -446,11 +539,11 @@ async fn auction_crash_recovery_scenario() {
     // Simulate post-crash: new instance loads from DB
     {
         let backend = SqliteStore::new(&db_url).await.unwrap();
-        
+
         // Verify auction recovered
         let auction = backend.get_auction(auction_id).await.unwrap();
         assert!(auction.is_some(), "auction should survive crash");
-        
+
         let auction = auction.unwrap();
         assert_eq!(auction["status"], "open");
         assert_eq!(auction["bandwidth_mbps"], 100.0);
@@ -458,12 +551,18 @@ async fn auction_crash_recovery_scenario() {
         // Verify bids recovered
         let bids = backend.get_bids_for_auction(auction_id).await.unwrap();
         assert_eq!(bids.len(), 2, "bids should survive crash");
-        
+
         // Verify bid details
-        let provider_a_bid = bids.iter().find(|b| b["provider_peer_id"] == "provider-a").unwrap();
+        let provider_a_bid = bids
+            .iter()
+            .find(|b| b["provider_peer_id"] == "provider-a")
+            .unwrap();
         assert_eq!(provider_a_bid["price_usd_per_gb"], 0.45);
-        
-        let provider_b_bid = bids.iter().find(|b| b["provider_peer_id"] == "provider-b").unwrap();
+
+        let provider_b_bid = bids
+            .iter()
+            .find(|b| b["provider_peer_id"] == "provider-b")
+            .unwrap();
         assert_eq!(provider_b_bid["price_usd_per_gb"], 0.48);
     }
 }
@@ -505,9 +604,8 @@ fn relay_peers_parsing() {
     // would be silently skipped.
     let peer_a = PeerId::random();
     let peer_b = PeerId::random();
-    let relay_peers = format!(
-        "/ip4/10.0.0.1/tcp/4001/p2p/{peer_a},/ip4/10.0.0.2/tcp/4001/p2p/{peer_b}"
-    );
+    let relay_peers =
+        format!("/ip4/10.0.0.1/tcp/4001/p2p/{peer_a},/ip4/10.0.0.2/tcp/4001/p2p/{peer_b}");
     std::env::set_var("DHT_RELAY_PEERS", &relay_peers);
 
     let config = DiscoveryConfig::from_env();
@@ -515,8 +613,14 @@ fn relay_peers_parsing() {
 
     assert_eq!(config.relay_peers[0].0, peer_a);
     assert_eq!(config.relay_peers[1].0, peer_b);
-    assert_eq!(config.relay_peers[0].1.to_string(), "/ip4/10.0.0.1/tcp/4001");
-    assert_eq!(config.relay_peers[1].1.to_string(), "/ip4/10.0.0.2/tcp/4001");
+    assert_eq!(
+        config.relay_peers[0].1.to_string(),
+        "/ip4/10.0.0.1/tcp/4001"
+    );
+    assert_eq!(
+        config.relay_peers[1].1.to_string(),
+        "/ip4/10.0.0.2/tcp/4001"
+    );
 
     // Cleanup
     std::env::remove_var("DHT_RELAY_PEERS");

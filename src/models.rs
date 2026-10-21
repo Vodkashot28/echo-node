@@ -291,10 +291,7 @@ mod tests {
         assert_eq!(base64_decode("QQ=="), b"A");
         assert_eq!(base64_decode("QUI="), b"AB");
         assert_eq!(base64_decode("QUJD"), b"ABC");
-        assert_eq!(
-            base64_decode("SGVsbG8sIFdvcmxkIQ=="),
-            b"Hello, World!"
-        );
+        assert_eq!(base64_decode("SGVsbG8sIFdvcmxkIQ=="), b"Hello, World!");
     }
 
     #[test]
@@ -310,10 +307,7 @@ mod tests {
             timestamp_secs: 1700000000,
             signature: "".to_string(),
         };
-        assert_eq!(
-            receipt.signed_message(),
-            "s1:1024:5:1700000000:peer_a"
-        );
+        assert_eq!(receipt.signed_message(), "s1:1024:5:1700000000:peer_a");
     }
 
     #[test]
@@ -350,7 +344,7 @@ mod tests {
 
     #[test]
     fn verify_signature_wrong_key() {
-        use ed25519_dalek::{SigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey};
         use rand::rngs::OsRng;
 
         let signing_key = SigningKey::generate(&mut OsRng);
@@ -375,6 +369,9 @@ mod tests {
 
         let result = receipt.verify_signature(&other_key.to_bytes());
         assert!(result.is_ok());
-        assert!(!result.unwrap(), "verification should have failed with wrong key");
+        assert!(
+            !result.unwrap(),
+            "verification should have failed with wrong key"
+        );
     }
 }

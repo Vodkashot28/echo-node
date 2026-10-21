@@ -126,11 +126,28 @@ impl PolicyConfig {
 #[serde(tag = "rule", rename_all = "snake_case")]
 pub enum PolicyViolation {
     BlockedPeer,
-    LowReputation { score: f64, min: f64 },
-    LowAccountability { score: f64, min: f64 },
-    HighLatency { latency_ms: f64, max_ms: f64 },
-    PeerQuotaExceeded { peer: String, in_use: u32, max: u32 },
-    RegionCapExceeded { region: String, in_use: u32, max: u32 },
+    LowReputation {
+        score: f64,
+        min: f64,
+    },
+    LowAccountability {
+        score: f64,
+        min: f64,
+    },
+    HighLatency {
+        latency_ms: f64,
+        max_ms: f64,
+    },
+    PeerQuotaExceeded {
+        peer: String,
+        in_use: u32,
+        max: u32,
+    },
+    RegionCapExceeded {
+        region: String,
+        in_use: u32,
+        max: u32,
+    },
 }
 
 impl std::fmt::Display for PolicyViolation {
@@ -141,18 +158,22 @@ impl std::fmt::Display for PolicyViolation {
                 write!(f, "reputation {score:.2} below minimum {min:.2}")
             }
             Self::LowAccountability { score, min } => {
-                write!(
-                    f,
-                    "soft-slashing score {score:.2} below minimum {min:.2}"
-                )
+                write!(f, "soft-slashing score {score:.2} below minimum {min:.2}")
             }
             Self::HighLatency { latency_ms, max_ms } => {
-                write!(f, "recorded latency {latency_ms:.1}ms above maximum {max_ms:.1}ms")
+                write!(
+                    f,
+                    "recorded latency {latency_ms:.1}ms above maximum {max_ms:.1}ms"
+                )
             }
             Self::PeerQuotaExceeded { peer, in_use, max } => {
                 write!(f, "peer {peer} already holds {in_use}/{max} sessions")
             }
-            Self::RegionCapExceeded { region, in_use, max } => {
+            Self::RegionCapExceeded {
+                region,
+                in_use,
+                max,
+            } => {
                 write!(f, "region {region} already holds {in_use}/{max} sessions")
             }
         }
@@ -309,7 +330,11 @@ impl PolicyEngine {
             }
         }
 
-        let region = if region.trim().is_empty() { "unknown" } else { region };
+        let region = if region.trim().is_empty() {
+            "unknown"
+        } else {
+            region
+        };
 
         let mut state = self.lock_state();
 
@@ -457,7 +482,9 @@ mod tests {
     fn open_config_allows_everything() {
         let engine = PolicyEngine::new(open_config());
         assert!(engine.config().is_open());
-        let permit = engine.admit("peerA", &facts(None, None), "us-west").unwrap();
+        let permit = engine
+            .admit("peerA", &facts(None, None), "us-west")
+            .unwrap();
         assert_eq!(engine.tracked_sessions(), 1);
         drop(permit);
         assert_eq!(engine.tracked_sessions(), 0);
@@ -470,10 +497,14 @@ mod tests {
             ..open_config()
         };
         let engine = PolicyEngine::new(config);
-        let err = engine.admit("bad-actor", &facts(Some(1.0), None), "us-west").unwrap_err();
+        let err = engine
+            .admit("bad-actor", &facts(Some(1.0), None), "us-west")
+            .unwrap_err();
         assert_eq!(err, PolicyViolation::BlockedPeer);
         // Other peers unaffected.
-        assert!(engine.admit("good", &facts(Some(1.0), None), "us-west").is_ok());
+        assert!(engine
+            .admit("good", &facts(Some(1.0), None), "us-west")
+            .is_ok());
     }
 
     #[test]
@@ -485,8 +516,12 @@ mod tests {
         let engine = PolicyEngine::new(config);
 
         // Unknown peer → score 0.0 → denied.
-        let err = engine.admit("newcomer", &facts(None, None), "eu").unwrap_err();
-        assert!(matches!(err, PolicyViolation::LowReputation { score, min } if score == 0.0 && min == 0.5));
+        let err = engine
+            .admit("newcomer", &facts(None, None), "eu")
+            .unwrap_err();
+        assert!(
+            matches!(err, PolicyViolation::LowReputation { score, min } if score == 0.0 && min == 0.5)
+        );
 
         // Below threshold → denied.
         let err = engine
@@ -514,8 +549,10 @@ mod tests {
         let err = engine
             .admit("slow", &facts(None, Some(150.0)), "eu")
             .unwrap_err();
-        assert!(matches!(err, PolicyViolation::HighLatency { latency_ms, max_ms }
-            if latency_ms == 150.0 && max_ms == 100.0));
+        assert!(
+            matches!(err, PolicyViolation::HighLatency { latency_ms, max_ms }
+            if latency_ms == 150.0 && max_ms == 100.0)
+        );
 
         // Under the ceiling → allowed.
         assert!(engine.admit("fast", &facts(None, Some(40.0)), "eu").is_ok());
@@ -534,7 +571,14 @@ mod tests {
         assert_eq!(engine.peer_sessions_in_use("peerA"), 2);
 
         let err = engine.admit("peerA", &facts(None, None), "eu").unwrap_err();
-        assert!(matches!(err, PolicyViolation::PeerQuotaExceeded { in_use: 2, max: 2, .. }));
+        assert!(matches!(
+            err,
+            PolicyViolation::PeerQuotaExceeded {
+                in_use: 2,
+                max: 2,
+                ..
+            }
+        ));
 
         // Other peers have their own quota.
         assert!(engine.admit("peerB", &facts(None, None), "eu").is_ok());
@@ -554,17 +598,30 @@ mod tests {
         };
         let engine = PolicyEngine::new(config);
 
-        let a = engine.admit("peerA", &facts(None, None), "us-west").unwrap();
-        let b = engine.admit("peerB", &facts(None, None), "us-west").unwrap();
+        let a = engine
+            .admit("peerA", &facts(None, None), "us-west")
+            .unwrap();
+        let b = engine
+            .admit("peerB", &facts(None, None), "us-west")
+            .unwrap();
 
         // Same region, third session → denied (different peer, same bucket).
         let err = engine
             .admit("peerC", &facts(None, None), "us-west")
             .unwrap_err();
-        assert!(matches!(err, PolicyViolation::RegionCapExceeded { in_use: 2, max: 2, .. }));
+        assert!(matches!(
+            err,
+            PolicyViolation::RegionCapExceeded {
+                in_use: 2,
+                max: 2,
+                ..
+            }
+        ));
 
         // Different region unaffected.
-        assert!(engine.admit("peerD", &facts(None, None), "eu-central").is_ok());
+        assert!(engine
+            .admit("peerD", &facts(None, None), "eu-central")
+            .is_ok());
 
         drop(a);
         assert_eq!(engine.region_sessions_in_use("us-west"), 1);
@@ -582,7 +639,9 @@ mod tests {
         let _held = engine.admit("peerA", &facts(None, None), "").unwrap();
         assert_eq!(engine.region_sessions_in_use("unknown"), 1);
         // Empty string and "unknown" share the bucket.
-        let err = engine.admit("peerB", &facts(None, None), "unknown").unwrap_err();
+        let err = engine
+            .admit("peerB", &facts(None, None), "unknown")
+            .unwrap_err();
         assert!(matches!(err, PolicyViolation::RegionCapExceeded { .. }));
     }
 
@@ -607,9 +666,12 @@ mod tests {
             PolicyViolation::BlockedPeer.to_string(),
             "peer is blacklisted"
         );
-        assert!(PolicyViolation::LowReputation { score: 0.1, min: 0.5 }
-            .to_string()
-            .contains("0.10"));
+        assert!(PolicyViolation::LowReputation {
+            score: 0.1,
+            min: 0.5
+        }
+        .to_string()
+        .contains("0.10"));
     }
 
     // ── Trust decay ────────────────────────────────────────────────
@@ -622,10 +684,26 @@ mod tests {
 
     #[test]
     fn decay_disabled_or_fresh_returns_raw_score() {
-        assert_eq!(decay_reputation(0.9, Some(365 * 86_400), 0.0), 0.9, "half-life 0 = off");
-        assert_eq!(decay_reputation(0.9, Some(0), 30.0), 0.9, "no idle = no decay");
-        assert_eq!(decay_reputation(0.9, None, 30.0), 0.9, "unknown idle = treated fresh");
-        assert_eq!(decay_reputation(0.9, Some(10_000_000), f64::NAN), 0.9, "NaN half-life = off");
+        assert_eq!(
+            decay_reputation(0.9, Some(365 * 86_400), 0.0),
+            0.9,
+            "half-life 0 = off"
+        );
+        assert_eq!(
+            decay_reputation(0.9, Some(0), 30.0),
+            0.9,
+            "no idle = no decay"
+        );
+        assert_eq!(
+            decay_reputation(0.9, None, 30.0),
+            0.9,
+            "unknown idle = treated fresh"
+        );
+        assert_eq!(
+            decay_reputation(0.9, Some(10_000_000), f64::NAN),
+            0.9,
+            "NaN half-life = off"
+        );
     }
 
     #[test]
@@ -633,7 +711,10 @@ mod tests {
         let d1 = decay_reputation(1.0, Some(86_400), 30.0);
         let d2 = decay_reputation(1.0, Some(90 * 86_400), 30.0);
         let d3 = decay_reputation(1.0, Some(10 * 365 * 86_400), 30.0);
-        assert!(d1 > d2 && d2 > d3, "decay must be monotonic: {d1} {d2} {d3}");
+        assert!(
+            d1 > d2 && d2 > d3,
+            "decay must be monotonic: {d1} {d2} {d3}"
+        );
         assert!(d3 >= 0.0);
         assert!(decay_reputation(0.0, Some(86_400), 30.0) == 0.0);
     }
@@ -733,7 +814,10 @@ mod tests {
         };
         assert_eq!(
             engine.admit("flaky", &failed, "eu").unwrap_err(),
-            PolicyViolation::LowAccountability { score: 0.5, min: 0.6 }
+            PolicyViolation::LowAccountability {
+                score: 0.5,
+                min: 0.6
+            }
         );
 
         // Same peer with mixed history (5/8 success ⇒ factor ≈ 0.8125) passes.
@@ -747,8 +831,13 @@ mod tests {
 
         // Unknown peer (no reputation row) scores 0 ⇒ denied.
         assert_eq!(
-            engine.admit("stranger", &facts(None, None), "eu").unwrap_err(),
-            PolicyViolation::LowAccountability { score: 0.0, min: 0.6 }
+            engine
+                .admit("stranger", &facts(None, None), "eu")
+                .unwrap_err(),
+            PolicyViolation::LowAccountability {
+                score: 0.0,
+                min: 0.6
+            }
         );
     }
 }

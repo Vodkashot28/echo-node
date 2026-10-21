@@ -45,8 +45,7 @@ impl RelayLatency {
     /// Record one encrypt/decrypt sample (milliseconds).
     fn record(&self, ms: f64) {
         use std::sync::atomic::Ordering::Relaxed;
-        self.total_ns
-            .fetch_add((ms * 1_000_000.0) as u64, Relaxed);
+        self.total_ns.fetch_add((ms * 1_000_000.0) as u64, Relaxed);
         self.samples.fetch_add(1, Relaxed);
     }
 
@@ -256,25 +255,32 @@ impl TunnelService {
                 .await
                 .context("failed to connect to provider")?
         } else {
-            tokio::time::timeout(Duration::from_millis(dial_ms), TcpStream::connect(remote_addr))
-                .await
-                .map_err(|_| anyhow!("dial timeout to provider {remote_addr}"))?
-                .context("failed to connect to provider")?
+            tokio::time::timeout(
+                Duration::from_millis(dial_ms),
+                TcpStream::connect(remote_addr),
+            )
+            .await
+            .map_err(|_| anyhow!("dial timeout to provider {remote_addr}"))?
+            .context("failed to connect to provider")?
         };
 
         // 3. Send session_id + local peer_id + optional ticket (plaintext, before Noise handshake).
         // Load a previously-received ticket for this provider from disk (if any).
         let stored_ticket = load_ticket_from_disk(&remote_peer_id.to_string());
-        send_preamble(&mut stream, session_id, &self.local_peer_id.to_string(), stored_ticket.as_deref()).await?;
+        send_preamble(
+            &mut stream,
+            session_id,
+            &self.local_peer_id.to_string(),
+            stored_ticket.as_deref(),
+        )
+        .await?;
 
         // 4. Construct domain-separated prologue: "EchoMesh|v1|<session_id>"
         let mut prologue = Vec::from(PROTOCOL_PROLOGUE_PREFIX);
         prologue.extend_from_slice(session_id.as_bytes());
 
         // 5. Initialize Noise_XX Initiator
-        let params = NOISE_PARAMS
-            .parse()
-            .context("invalid noise params")?;
+        let params = NOISE_PARAMS.parse().context("invalid noise params")?;
         let mut noise = Builder::new(params)
             .prologue(&prologue)
             .local_private_key(&self.static_private_key)
@@ -317,11 +323,13 @@ impl TunnelService {
             .ok_or_else(|| anyhow!("responder failed to provide static public key"))?;
 
         if remote_static != expected_provider_noise_pubkey {
-            self.relay_config.security.inc_invalid_key_rejection(&format!(
-                "provider {remote_peer_id} at {remote_addr} (expected {} bytes, got {} bytes)",
-                expected_provider_noise_pubkey.len(),
-                remote_static.len()
-            ));
+            self.relay_config
+                .security
+                .inc_invalid_key_rejection(&format!(
+                    "provider {remote_peer_id} at {remote_addr} (expected {} bytes, got {} bytes)",
+                    expected_provider_noise_pubkey.len(),
+                    remote_static.len()
+                ));
             bail!(
                 "MITM detected: remote noise public key does not match discovery record \
                  (expected {} bytes, got {} bytes)",
@@ -361,7 +369,8 @@ impl TunnelService {
                 self.relay_config.handshake_timeout_ms,
                 "ticket signal frame",
                 recv_encrypted_frame(&mut stream, transport_arc.clone()),
-            ).await;
+            )
+            .await;
             match ticket_result {
                 Ok(frame) if !frame.is_empty() && frame[0] == 0x01 => {
                     let ticket_bytes = &frame[1..];
@@ -371,7 +380,10 @@ impl TunnelService {
                     }
                 }
                 Ok(_) => {
-                    debug!(session = session_id, "provider sent no-ticket signal (tickets disabled)");
+                    debug!(
+                        session = session_id,
+                        "provider sent no-ticket signal (tickets disabled)"
+                    );
                 }
                 Err(e) => {
                     warn!(session = session_id, error = %e, "failed to read ticket signal frame (non-fatal)");
@@ -420,7 +432,10 @@ impl TunnelService {
             .context("failed to connect to target")?;
 
         // Token bucket: use configured max upload bandwidth for rate limiting
-        let mut bucket = TokenBucket::new(self.relay_config.max_upload_mbps, self.relay_config.max_upload_mbps);
+        let mut bucket = TokenBucket::new(
+            self.relay_config.max_upload_mbps,
+            self.relay_config.max_upload_mbps,
+        );
 
         let (bytes_sent, bytes_received, _avg_latency_ms) = Self::encrypted_relay_with_metering(
             tokio::io::split(session.stream),
@@ -451,8 +466,10 @@ impl TunnelService {
         app_stream: TcpStream,
     ) -> Result<(u64, u64)> {
         // Token bucket: use configured max upload bandwidth for rate limiting
-        let mut bucket =
-            TokenBucket::new(self.relay_config.max_upload_mbps, self.relay_config.max_upload_mbps);
+        let mut bucket = TokenBucket::new(
+            self.relay_config.max_upload_mbps,
+            self.relay_config.max_upload_mbps,
+        );
 
         let (bytes_sent, bytes_received, _avg_latency_ms) = Self::encrypted_relay_with_metering(
             tokio::io::split(session.stream),
@@ -575,21 +592,16 @@ impl TunnelService {
 
         // Read session_id, peer_id, and optional ticket from consumer (plaintext, before Noise handshake).
         let hs_ms = config.handshake_timeout_ms;
-        let (session_id, remote_peer_id_str, presented_ticket_bytes) = match handshake_read(
-            hs_ms,
-            "session preamble",
-            recv_preamble(&mut stream),
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                config
-                    .security
-                    .inc_handshake_failure(&format!("preamble read from {addr}: {e}"));
-                return Err(e);
-            }
-        };
+        let (session_id, remote_peer_id_str, presented_ticket_bytes) =
+            match handshake_read(hs_ms, "session preamble", recv_preamble(&mut stream)).await {
+                Ok(v) => v,
+                Err(e) => {
+                    config
+                        .security
+                        .inc_handshake_failure(&format!("preamble read from {addr}: {e}"));
+                    return Err(e);
+                }
+            };
         info!(
             session = session_id,
             remote_peer = %remote_peer_id_str,
@@ -609,7 +621,14 @@ impl TunnelService {
         let mut resumed_state: Option<SessionState> = None;
 
         if let (Some(ticket_bytes), Some(identity)) = (&presented_ticket_bytes, &config.identity) {
-            match attempt_ticket_resumption(ticket_bytes, identity, &remote_peer_id_str, &config.backend).await {
+            match attempt_ticket_resumption(
+                ticket_bytes,
+                identity,
+                &remote_peer_id_str,
+                &config.backend,
+            )
+            .await
+            {
                 Ok(state) => {
                     is_resumed = true;
                     resumed_state = Some(state);
@@ -634,9 +653,7 @@ impl TunnelService {
         // Now construct the prologue with the session_id
         prologue.extend_from_slice(session_id.as_bytes());
 
-        let params = NOISE_PARAMS
-            .parse()
-            .context("invalid noise params")?;
+        let params = NOISE_PARAMS.parse().context("invalid noise params")?;
         let mut noise = Builder::new(params)
             .prologue(&prologue)
             .local_private_key(&static_private_key)
@@ -646,17 +663,16 @@ impl TunnelService {
         let mut buf = [0u8; NOISE_MAX_MSG_LEN];
 
         // Msg 1 (Initiator → Responder): -> e
-        let len = match handshake_read(hs_ms, "noise msg1", recv_wire_msg(&mut stream, &mut buf))
-            .await
-        {
-            Ok(len) => len,
-            Err(e) => {
-                config
-                    .security
-                    .inc_handshake_failure(&format!("msg1 read from {addr}: {e}"));
-                return Err(e);
-            }
-        };
+        let len =
+            match handshake_read(hs_ms, "noise msg1", recv_wire_msg(&mut stream, &mut buf)).await {
+                Ok(len) => len,
+                Err(e) => {
+                    config
+                        .security
+                        .inc_handshake_failure(&format!("msg1 read from {addr}: {e}"));
+                    return Err(e);
+                }
+            };
         if let Err(e) = noise.read_message(&buf[..len], &mut []) {
             // Invalid/replayed handshake message (fails Noise authentication).
             config
@@ -683,17 +699,16 @@ impl TunnelService {
         }
 
         // Msg 3 (Initiator → Responder): -> s, se
-        let len = match handshake_read(hs_ms, "noise msg3", recv_wire_msg(&mut stream, &mut buf))
-            .await
-        {
-            Ok(len) => len,
-            Err(e) => {
-                config
-                    .security
-                    .inc_handshake_failure(&format!("msg3 read from {addr}: {e}"));
-                return Err(e);
-            }
-        };
+        let len =
+            match handshake_read(hs_ms, "noise msg3", recv_wire_msg(&mut stream, &mut buf)).await {
+                Ok(len) => len,
+                Err(e) => {
+                    config
+                        .security
+                        .inc_handshake_failure(&format!("msg3 read from {addr}: {e}"));
+                    return Err(e);
+                }
+            };
         if let Err(e) = noise.read_message(&buf[..len], &mut []) {
             // Invalid/replayed handshake message (fails Noise authentication).
             config
@@ -728,76 +743,76 @@ impl TunnelService {
             None
         } else {
             match &config.policy {
-            None => None,
-            Some(policy) => {
-                let reputation = config
-                    .backend
-                    .get_peer_reputation(&remote_peer_id_str)
-                    .await
-                    .ok()
-                    .flatten();
-                let region = config
-                    .backend
-                    .get_capability_for_peer(&remote_peer_id_str)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|c| c.region)
-                    .unwrap_or_default();
-                // Recency for trust decay: seconds since `last_active_at`.
-                let idle_secs = reputation
-                    .as_ref()
-                    .and_then(|r| r.last_active_at.as_deref())
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| {
-                        let dt = dt.with_timezone(&chrono::Utc);
-                        (chrono::Utc::now() - dt).num_seconds().max(0) as u64
-                    });
-                let facts = PeerFacts {
-                    reputation_score: reputation.as_ref().map(|r| r.reputation_score),
-                    avg_latency_ms: reputation.as_ref().map(|r| r.avg_latency_ms),
-                    idle_secs,
-                    // Soft-slashing inputs: violations already attributed to
-                    // this peer + the provider's recorded session outcomes.
-                    violations: config.security.peer_violation_count(&remote_peer_id_str),
-                    successful_sessions: reputation
+                None => None,
+                Some(policy) => {
+                    let reputation = config
+                        .backend
+                        .get_peer_reputation(&remote_peer_id_str)
+                        .await
+                        .ok()
+                        .flatten();
+                    let region = config
+                        .backend
+                        .get_capability_for_peer(&remote_peer_id_str)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|c| c.region)
+                        .unwrap_or_default();
+                    // Recency for trust decay: seconds since `last_active_at`.
+                    let idle_secs = reputation
                         .as_ref()
-                        .map(|r| r.successful_sessions)
-                        .unwrap_or(0),
-                    failed_sessions: reputation
-                        .as_ref()
-                        .map(|r| r.failed_sessions)
-                        .unwrap_or(0),
-                };
-                match policy.admit(&remote_peer_id_str, &facts, &region) {
-                    Ok(permit) => Some(permit),
-                    Err(violation) => {
-                        config.security.inc_policy_rejection(&format!(
-                            "peer {remote_peer_id_str}: {violation}"
-                        ));
-                        // Judgment-based denials (blacklist / reputation /
-                        // soft-slashing score) are the peer's own record —
-                        // attribute them for future accountability scoring.
-                        // Quota and latency denials are transient/honest and
-                        // deliberately NOT counted against the peer.
-                        if matches!(
-                            violation,
-                            PolicyViolation::BlockedPeer
-                                | PolicyViolation::LowReputation { .. }
-                                | PolicyViolation::LowAccountability { .. }
-                        ) {
-                            config.security.note_peer_violation(&remote_peer_id_str);
+                        .and_then(|r| r.last_active_at.as_deref())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| {
+                            let dt = dt.with_timezone(&chrono::Utc);
+                            (chrono::Utc::now() - dt).num_seconds().max(0) as u64
+                        });
+                    let facts = PeerFacts {
+                        reputation_score: reputation.as_ref().map(|r| r.reputation_score),
+                        avg_latency_ms: reputation.as_ref().map(|r| r.avg_latency_ms),
+                        idle_secs,
+                        // Soft-slashing inputs: violations already attributed to
+                        // this peer + the provider's recorded session outcomes.
+                        violations: config.security.peer_violation_count(&remote_peer_id_str),
+                        successful_sessions: reputation
+                            .as_ref()
+                            .map(|r| r.successful_sessions)
+                            .unwrap_or(0),
+                        failed_sessions: reputation
+                            .as_ref()
+                            .map(|r| r.failed_sessions)
+                            .unwrap_or(0),
+                    };
+                    match policy.admit(&remote_peer_id_str, &facts, &region) {
+                        Ok(permit) => Some(permit),
+                        Err(violation) => {
+                            config.security.inc_policy_rejection(&format!(
+                                "peer {remote_peer_id_str}: {violation}"
+                            ));
+                            // Judgment-based denials (blacklist / reputation /
+                            // soft-slashing score) are the peer's own record —
+                            // attribute them for future accountability scoring.
+                            // Quota and latency denials are transient/honest and
+                            // deliberately NOT counted against the peer.
+                            if matches!(
+                                violation,
+                                PolicyViolation::BlockedPeer
+                                    | PolicyViolation::LowReputation { .. }
+                                    | PolicyViolation::LowAccountability { .. }
+                            ) {
+                                config.security.note_peer_violation(&remote_peer_id_str);
+                            }
+                            warn!(
+                                session = %session_id,
+                                peer = %remote_peer_id_str,
+                                violation = %violation,
+                                "policy denied session"
+                            );
+                            return Err(anyhow!("policy denied session: {violation}"));
                         }
-                        warn!(
-                            session = %session_id,
-                            peer = %remote_peer_id_str,
-                            violation = %violation,
-                            "policy denied session"
-                        );
-                        return Err(anyhow!("policy denied session: {violation}"));
                     }
                 }
-            }
             } // close match &config.policy
         }; // close if is_resumed / else
 
@@ -832,7 +847,10 @@ impl TunnelService {
             started_at: chrono::Utc::now().to_rfc3339(),
             ended_at: None,
         };
-        config.backend.insert_connection(&connection_record).await
+        config
+            .backend
+            .insert_connection(&connection_record)
+            .await
             .context("failed to insert connection record")?;
 
         let start_time = std::time::Instant::now();
@@ -860,14 +878,25 @@ impl TunnelService {
         let ticket_signal: Vec<u8> = if config.enable_session_tickets {
             if let Some(identity) = &config.identity {
                 let state = SessionState {
-                    encryption_key: vec![],   // transport keys not extractable from snow
+                    encryption_key: vec![], // transport keys not extractable from snow
                     decryption_key: vec![],
                     send_sequence: 0,
                     recv_sequence: 0,
                     bytes_sent: resumed_state.as_ref().map(|s| s.bytes_sent).unwrap_or(0),
-                    bytes_received: resumed_state.as_ref().map(|s| s.bytes_received).unwrap_or(0),
+                    bytes_received: resumed_state
+                        .as_ref()
+                        .map(|s| s.bytes_received)
+                        .unwrap_or(0),
                 };
-                match build_ticket_frame(identity, &session_id, &remote_peer_id_str, state, &config.backend).await {
+                match build_ticket_frame(
+                    identity,
+                    &session_id,
+                    &remote_peer_id_str,
+                    state,
+                    &config.backend,
+                )
+                .await
+                {
                     Ok(frame) => {
                         info!(session = %session_id, "session ticket issued");
                         frame
@@ -944,7 +973,11 @@ impl TunnelService {
         //   - Bonus for meaningful duration (>10s)
         //   - Bonus for throughput (bytes/second normalized)
         //   - Penalty for very short sessions (<1s, likely failed)
-        let base_score = if bytes_sent + bytes_received > 0 { 0.6 } else { 0.2 };
+        let base_score = if bytes_sent + bytes_received > 0 {
+            0.6
+        } else {
+            0.2
+        };
         let duration_bonus = if duration > 10.0 {
             0.2
         } else if duration > 1.0 {
@@ -1020,7 +1053,10 @@ impl TunnelService {
     /// Returns (bytes_sent, bytes_received, avg_latency_ms) where
     /// avg_latency_ms measures the mean Noise encrypt/decrypt processing time.
     async fn encrypted_relay_with_metering(
-        tunnel_stream: (tokio::io::ReadHalf<TcpStream>, tokio::io::WriteHalf<TcpStream>),
+        tunnel_stream: (
+            tokio::io::ReadHalf<TcpStream>,
+            tokio::io::WriteHalf<TcpStream>,
+        ),
         target_stream: TcpStream,
         transport: Arc<tokio::sync::Mutex<TransportState>>,
         session_id: &str,
@@ -1120,7 +1156,11 @@ impl TunnelService {
                 };
 
                 // Forward plaintext to target
-                if target_write.write_all(&plain_buf[..plain_len]).await.is_err() {
+                if target_write
+                    .write_all(&plain_buf[..plain_len])
+                    .await
+                    .is_err()
+                {
                     break;
                 }
                 bytes_sent += plain_len as u64;
@@ -1170,9 +1210,7 @@ impl TunnelService {
                 }
                 bytes_received += n as u64;
                 if let Some(metering) = metering_ingress {
-                    let _ = metering
-                        .record_transfer(&sid_i, "ingress", n as u64)
-                        .await;
+                    let _ = metering.record_transfer(&sid_i, "ingress", n as u64).await;
                 }
             }
         };
@@ -1289,8 +1327,7 @@ async fn recv_session_and_peer_id(stream: &mut TcpStream) -> Result<(String, Str
         .read_exact(&mut session_buf)
         .await
         .context("failed to read session ID")?;
-    let session_id =
-        String::from_utf8(session_buf).context("invalid session ID encoding")?;
+    let session_id = String::from_utf8(session_buf).context("invalid session ID encoding")?;
 
     let peer_len = stream
         .read_u32()
@@ -1298,18 +1335,14 @@ async fn recv_session_and_peer_id(stream: &mut TcpStream) -> Result<(String, Str
         .context("failed to read peer ID length")? as usize;
 
     if peer_len > 512 {
-        bail!(
-            "peer ID length {} exceeds maximum of 512 bytes",
-            peer_len
-        );
+        bail!("peer ID length {} exceeds maximum of 512 bytes", peer_len);
     }
     let mut peer_buf = vec![0u8; peer_len];
     stream
         .read_exact(&mut peer_buf)
         .await
         .context("failed to read peer ID")?;
-    let peer_id =
-        String::from_utf8(peer_buf).context("invalid peer ID encoding")?;
+    let peer_id = String::from_utf8(peer_buf).context("invalid peer ID encoding")?;
 
     Ok((session_id, peer_id))
 }
@@ -1362,21 +1395,37 @@ async fn send_preamble(
 /// Receive the extended preamble. Returns (session_id, peer_id, Option<ticket_bytes>).
 async fn recv_preamble(stream: &mut TcpStream) -> Result<(String, String, Option<Vec<u8>>)> {
     // session_id
-    let session_len = stream.read_u32().await.context("preamble: session_id length")? as usize;
+    let session_len = stream
+        .read_u32()
+        .await
+        .context("preamble: session_id length")? as usize;
     if session_len > 256 {
-        bail!("session ID length {} exceeds maximum of 256 bytes", session_len);
+        bail!(
+            "session ID length {} exceeds maximum of 256 bytes",
+            session_len
+        );
     }
     let mut session_buf = vec![0u8; session_len];
-    stream.read_exact(&mut session_buf).await.context("preamble: session_id")?;
-    let session_id = String::from_utf8(session_buf).context("preamble: invalid session_id encoding")?;
+    stream
+        .read_exact(&mut session_buf)
+        .await
+        .context("preamble: session_id")?;
+    let session_id =
+        String::from_utf8(session_buf).context("preamble: invalid session_id encoding")?;
 
     // peer_id
-    let peer_len = stream.read_u32().await.context("preamble: peer_id length")? as usize;
+    let peer_len = stream
+        .read_u32()
+        .await
+        .context("preamble: peer_id length")? as usize;
     if peer_len > 512 {
         bail!("peer ID length {} exceeds maximum of 512 bytes", peer_len);
     }
     let mut peer_buf = vec![0u8; peer_len];
-    stream.read_exact(&mut peer_buf).await.context("preamble: peer_id")?;
+    stream
+        .read_exact(&mut peer_buf)
+        .await
+        .context("preamble: peer_id")?;
     let peer_id = String::from_utf8(peer_buf).context("preamble: invalid peer_id encoding")?;
 
     // ticket flag
@@ -1387,7 +1436,10 @@ async fn recv_preamble(stream: &mut TcpStream) -> Result<(String, String, Option
             bail!("ticket length {} exceeds maximum of 2048 bytes", tlen);
         }
         let mut tbuf = vec![0u8; tlen];
-        stream.read_exact(&mut tbuf).await.context("preamble: ticket data")?;
+        stream
+            .read_exact(&mut tbuf)
+            .await
+            .context("preamble: ticket data")?;
         Some(tbuf)
     } else {
         None
@@ -1439,13 +1491,23 @@ async fn build_ticket_frame(
     state: SessionState,
     backend: &Arc<dyn MetricsBackend>,
 ) -> Result<Vec<u8>> {
-    let ticket = SessionTicket::issue(identity, session_id.to_string(), consumer_peer_id.to_string(), state)
-        .context("ticket issue failed")?;
+    let ticket = SessionTicket::issue(
+        identity,
+        session_id.to_string(),
+        consumer_peer_id.to_string(),
+        state,
+    )
+    .context("ticket issue failed")?;
     let ticket_bytes = ticket.serialize().context("ticket serialize failed")?;
 
     // Persist to DB for later lookup on reconnect.
     backend
-        .store_session_ticket(session_id, consumer_peer_id, &ticket_bytes, ticket.expires_at as i64)
+        .store_session_ticket(
+            session_id,
+            consumer_peer_id,
+            &ticket_bytes,
+            ticket.expires_at as i64,
+        )
         .await
         .context("store session ticket failed")?;
 
@@ -1483,8 +1545,7 @@ async fn attempt_ticket_resumption(
     backend: &Arc<dyn MetricsBackend>,
 ) -> Result<SessionState> {
     // Deserialize
-    let ticket = SessionTicket::deserialize(ticket_bytes)
-        .context("ticket deserialize failed")?;
+    let ticket = SessionTicket::deserialize(ticket_bytes).context("ticket deserialize failed")?;
 
     // Check it hasn't expired
     if ticket.is_expired() {

@@ -74,7 +74,10 @@ impl Scopes {
                 "settlements" => scopes.settlements = true,
                 "admin" => scopes.admin = true,
                 "" => {}
-                other => warn!(scope = other, "unknown API scope ignored (known: control, settlements, admin)"),
+                other => warn!(
+                    scope = other,
+                    "unknown API scope ignored (known: control, settlements, admin)"
+                ),
             }
         }
         scopes
@@ -166,16 +169,12 @@ impl ApiKeyRegistry {
             warn!(key = %name, "duplicate API token ignored");
             return;
         }
-        self.keys.push((
-            token,
-            ApiIdentity {
-                name,
-                scopes,
-            },
-        ));
+        self.keys.push((token, ApiIdentity { name, scopes }));
     }
 
-    fn parse_keys_json(json: &str) -> Result<Vec<(Option<String>, String, Scopes)>, serde_json::Error> {
+    fn parse_keys_json(
+        json: &str,
+    ) -> Result<Vec<(Option<String>, String, Scopes)>, serde_json::Error> {
         let entries: Vec<ApiKeyEntry> = serde_json::from_str(json)?;
         Ok(entries
             .into_iter()
@@ -316,11 +315,7 @@ mod tests {
             "tok-ci".to_string(),
             Scopes::from_names(["control"]),
         );
-        registry.insert(
-            "ops".to_string(),
-            "tok-ops".to_string(),
-            Scopes::admin(),
-        );
+        registry.insert("ops".to_string(), "tok-ops".to_string(), Scopes::admin());
 
         let id = registry.authenticate("tok-ops").expect("ops token");
         assert_eq!(id.name, "ops");
@@ -400,7 +395,11 @@ mod tests {
             .unwrap()
             .scopes
             .grants(Scope::Settlements));
-        assert!(!both.authenticate("json-tok").unwrap().scopes.grants(Scope::Control));
+        assert!(!both
+            .authenticate("json-tok")
+            .unwrap()
+            .scopes
+            .grants(Scope::Control));
 
         // Malformed API_KEYS falls back to legacy only (warn + continue).
         std::env::set_var("API_KEYS", "not-json");

@@ -268,16 +268,24 @@ impl MetricsBackend for SqliteStore {
     }
 
     async fn get_peer_reputation(&self, peer_id: &str) -> Result<Option<PeerReputation>> {
-        let row: Option<(String, f64, i64, i64, i64, f64, Option<String>, Option<String>)> =
-            sqlx::query_as(
-                "SELECT peer_id, reputation_score, total_bytes_relayed, successful_sessions,
+        let row: Option<(
+            String,
+            f64,
+            i64,
+            i64,
+            i64,
+            f64,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT peer_id, reputation_score, total_bytes_relayed, successful_sessions,
                  failed_sessions, avg_latency_ms, last_active_at, recorded_at
                  FROM peer_reputation WHERE peer_id = ?",
-            )
-            .bind(peer_id)
-            .fetch_optional(&self.pool)
-            .await
-            .context("sqlite get peer_reputation")?;
+        )
+        .bind(peer_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("sqlite get peer_reputation")?;
         Ok(row.map(|r| PeerReputation {
             peer_id: r.0,
             reputation_score: r.1,
@@ -371,16 +379,25 @@ impl MetricsBackend for SqliteStore {
     }
 
     async fn get_receipts_for_session(&self, session_id: &str) -> Result<Vec<StateReceipt>> {
-        let rows: Vec<(String, String, String, String, i64, String, i64, i64, String)> =
-            sqlx::query_as(
-                "SELECT receipt_id, session_id, signer_peer_id, counterparty_peer_id,
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            String,
+            i64,
+            String,
+            i64,
+            i64,
+            String,
+        )> = sqlx::query_as(
+            "SELECT receipt_id, session_id, signer_peer_id, counterparty_peer_id,
                  bytes_transferred, direction, sequence_number, timestamp_secs, signature
                  FROM state_receipts WHERE session_id = ? ORDER BY sequence_number ASC",
-            )
-            .bind(session_id)
-            .fetch_all(&self.pool)
-            .await
-            .context("sqlite get receipts")?;
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("sqlite get receipts")?;
         Ok(rows
             .into_iter()
             .map(|r| StateReceipt {
@@ -439,7 +456,18 @@ impl MetricsBackend for SqliteStore {
         limit: i64,
     ) -> Result<Vec<CapabilityDescriptor>> {
         let rows: Vec<(
-            String, Vec<u8>, String, f64, f64, f64, f64, String, i32, i32, i64, Vec<u8>,
+            String,
+            Vec<u8>,
+            String,
+            f64,
+            f64,
+            f64,
+            f64,
+            String,
+            i32,
+            i32,
+            i64,
+            Vec<u8>,
         )> = sqlx::query_as(
             "SELECT peer_id, public_key, region, upload_cap_mbps, download_cap_mbps,
              avg_latency_ms, reputation_score, supported_encryption, max_sessions,
@@ -478,7 +506,18 @@ impl MetricsBackend for SqliteStore {
 
     async fn get_capability_for_peer(&self, peer_id: &str) -> Result<Option<CapabilityDescriptor>> {
         let row: Option<(
-            String, Vec<u8>, String, f64, f64, f64, f64, String, i32, i32, i64, Vec<u8>,
+            String,
+            Vec<u8>,
+            String,
+            f64,
+            f64,
+            f64,
+            f64,
+            String,
+            i32,
+            i32,
+            i64,
+            Vec<u8>,
         )> = sqlx::query_as(
             "SELECT peer_id, public_key, region, upload_cap_mbps, download_cap_mbps,
              avg_latency_ms, reputation_score, supported_encryption, max_sessions,
@@ -745,22 +784,25 @@ impl MetricsBackend for SqliteStore {
         .await
         .context("sqlite list auctions")?;
 
-        Ok(rows.into_iter().map(|r| {
-            serde_json::json!({
-                "auction_id": r.0,
-                "requester_peer_id": r.1,
-                "region": r.2,
-                "bandwidth_mbps": r.3,
-                "budget_usd_per_gb": r.4,
-                "window_secs": r.5,
-                "created_at": r.6,
-                "closes_at": r.7,
-                "status": r.8,
-                "winning_peer_id": r.9,
-                "winning_price": r.10,
-                "awarded_at": r.11,
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "auction_id": r.0,
+                    "requester_peer_id": r.1,
+                    "region": r.2,
+                    "bandwidth_mbps": r.3,
+                    "budget_usd_per_gb": r.4,
+                    "window_secs": r.5,
+                    "created_at": r.6,
+                    "closes_at": r.7,
+                    "status": r.8,
+                    "winning_peer_id": r.9,
+                    "winning_price": r.10,
+                    "awarded_at": r.11,
+                })
             })
-        }).collect())
+            .collect())
     }
 
     async fn update_auction_status(
@@ -831,17 +873,20 @@ impl MetricsBackend for SqliteStore {
         .await
         .context("sqlite get bids for auction")?;
 
-        Ok(rows.into_iter().map(|r| {
-            serde_json::json!({
-                "bid_id": r.0,
-                "auction_id": r.1,
-                "provider_peer_id": r.2,
-                "price_usd_per_gb": r.3,
-                "reputation_score": r.4,
-                "avg_latency_ms": r.5,
-                "submitted_at": r.6,
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "bid_id": r.0,
+                    "auction_id": r.1,
+                    "provider_peer_id": r.2,
+                    "price_usd_per_gb": r.3,
+                    "reputation_score": r.4,
+                    "avg_latency_ms": r.5,
+                    "submitted_at": r.6,
+                })
             })
-        }).collect())
+            .collect())
     }
 
     async fn cleanup_old_auctions(&self, older_than: i64) -> Result<u64> {

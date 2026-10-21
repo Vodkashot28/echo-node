@@ -223,13 +223,12 @@ pub async fn run_postgres(pool: &PgPool, migrations: &[Migration]) -> Result<()>
     .context("failed to create schema_migrations table")?;
 
     for migration in migrations {
-        let applied: Option<(i32,)> = sqlx::query_as(
-            "SELECT version FROM schema_migrations WHERE version = $1",
-        )
-        .bind(migration.version)
-        .fetch_optional(pool)
-        .await
-        .context("failed to check migration status")?;
+        let applied: Option<(i32,)> =
+            sqlx::query_as("SELECT version FROM schema_migrations WHERE version = $1")
+                .bind(migration.version)
+                .fetch_optional(pool)
+                .await
+                .context("failed to check migration status")?;
 
         if applied.is_some() {
             continue;
@@ -293,13 +292,12 @@ pub async fn run_sqlite(pool: &SqlitePool, migrations: &[Migration]) -> Result<(
     .context("failed to create schema_migrations table")?;
 
     for migration in migrations {
-        let applied: Option<(i32,)> = sqlx::query_as(
-            "SELECT version FROM schema_migrations WHERE version = ?",
-        )
-        .bind(migration.version)
-        .fetch_optional(pool)
-        .await
-        .context("failed to check migration status")?;
+        let applied: Option<(i32,)> =
+            sqlx::query_as("SELECT version FROM schema_migrations WHERE version = ?")
+                .bind(migration.version)
+                .fetch_optional(pool)
+                .await
+                .context("failed to check migration status")?;
 
         if applied.is_some() {
             continue;

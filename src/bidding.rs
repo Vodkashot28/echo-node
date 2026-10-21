@@ -180,7 +180,10 @@ pub enum BidError {
     /// Peer is on `POLICY_BLOCKED_PEERS`.
     Blocked,
     /// Bid price exceeds the auction's budget cap.
-    BudgetExceeded { price: f64, cap: f64 },
+    BudgetExceeded {
+        price: f64,
+        cap: f64,
+    },
     /// This provider already bid on the auction.
     DuplicateBid,
     /// Auction is at the per-auction bid cap.
@@ -193,7 +196,9 @@ impl std::fmt::Display for BidError {
             BidError::Invalid(m) => write!(f, "invalid request: {m}"),
             BidError::NotFound(id) => write!(f, "auction not found: {id}"),
             BidError::Closed(status) => write!(f, "auction is {status}"),
-            BidError::NotRequester => write!(f, "only the auction requester may perform this action"),
+            BidError::NotRequester => {
+                write!(f, "only the auction requester may perform this action")
+            }
             BidError::Blocked => write!(f, "peer is blocked"),
             BidError::BudgetExceeded { price, cap } => {
                 write!(f, "bid {price:.6} USD/GB exceeds budget cap {cap:.6}")
@@ -274,7 +279,12 @@ impl Default for BidConfig {
 impl BidConfig {
     /// Read the `BID_*` env vars and merge in the shared blocked-peer list.
     pub fn from_env_with_blocked(blocked_peers: HashSet<String>) -> Self {
-        let default_window_secs = env_u64_clamped("BID_WINDOW_SECS", DEFAULT_AUCTION_WINDOW_SECS, 1, MAX_AUCTION_WINDOW_SECS);
+        let default_window_secs = env_u64_clamped(
+            "BID_WINDOW_SECS",
+            DEFAULT_AUCTION_WINDOW_SECS,
+            1,
+            MAX_AUCTION_WINDOW_SECS,
+        );
         let w_reputation = env_f64_clamped("BID_W_REPUTATION", 0.6, 0.0, 1.0);
         let w_latency = env_f64_clamped("BID_W_LATENCY", 0.4, 0.0, 1.0);
         let ref_latency_ms = env_f64_clamped("BID_REF_LATENCY_MS", 100.0, 1.0, 10_000.0);
@@ -467,8 +477,7 @@ impl AuctionRecord {
         if self.closes_at - self.created_at > MAX_AUCTION_WINDOW_SECS {
             return Err("auction lifetime exceeds the window ceiling".into());
         }
-        if !self.host_api_addr.starts_with("http://")
-            && !self.host_api_addr.starts_with("https://")
+        if !self.host_api_addr.starts_with("http://") && !self.host_api_addr.starts_with("https://")
         {
             return Err("host_api_addr must be an http(s) base URL".into());
         }
@@ -500,8 +509,8 @@ impl AuctionRecord {
                 "auction record exceeds {MAX_AUCTION_RECORD_BYTES} bytes"
             )));
         }
-        let rec: Self = serde_json::from_slice(bytes)
-            .map_err(|e| BidError::Invalid(format!("decode: {e}")))?;
+        let rec: Self =
+            serde_json::from_slice(bytes).map_err(|e| BidError::Invalid(format!("decode: {e}")))?;
         rec.validate().map_err(BidError::Invalid)?;
         Ok(rec)
     }
@@ -556,9 +565,7 @@ pub fn encode_auction_index(ids: &[String]) -> Result<Vec<u8>, BidError> {
 /// deduped, capped at [`MAX_AUCTION_INDEX_IDS_DECODE`].
 pub fn decode_auction_index(bytes: &[u8]) -> Result<Vec<String>, BidError> {
     if bytes.len() > 4096 {
-        return Err(BidError::Invalid(
-            "auction index exceeds 4096 bytes".into(),
-        ));
+        return Err(BidError::Invalid("auction index exceeds 4096 bytes".into()));
     }
     let raw: Vec<String> = serde_json::from_slice(bytes)
         .map_err(|e| BidError::Invalid(format!("decode index: {e}")))?;
@@ -764,7 +771,9 @@ pub fn verify_signed_bid(
     // from that key, never taken on trust from the payload.
     let ed_pk = libp2p_identity::ed25519::PublicKey::try_from_bytes(&pk_raw)
         .map_err(|_| BidError::Invalid("invalid ed25519 public key".into()))?;
-    let derived = libp2p_identity::PublicKey::from(ed_pk).to_peer_id().to_string();
+    let derived = libp2p_identity::PublicKey::from(ed_pk)
+        .to_peer_id()
+        .to_string();
     if derived != claimed_peer_id {
         return Err(BidError::Invalid(format!(
             "peer id mismatch: claimed {claimed_peer_id}, signature proves {derived}"
@@ -853,7 +862,12 @@ impl BidEngine {
     }
 
     /// Open a new auction. `requester` is the consumer's peer id.
-    pub fn create_auction(&self, req: CreateAuction, requester: &str, now: u64) -> Result<Auction, BidError> {
+    pub fn create_auction(
+        &self,
+        req: CreateAuction,
+        requester: &str,
+        now: u64,
+    ) -> Result<Auction, BidError> {
         Self::validate_create(&req)?;
         if self.cfg.blocked_peers.contains(requester) {
             return Err(BidError::Blocked);
@@ -921,7 +935,9 @@ impl BidEngine {
             .ok_or_else(|| BidError::NotFound(auction_id.to_string()))?;
 
         if !auction.status.is_open() {
-            return Err(BidError::Closed(format!("{:?}", auction.status).to_lowercase()));
+            return Err(BidError::Closed(
+                format!("{:?}", auction.status).to_lowercase(),
+            ));
         }
         // Late submissions race the sweeper: treat past-deadline as closed.
         if now >= auction.closes_at {
@@ -961,7 +977,12 @@ impl BidEngine {
     }
 
     /// Close an auction now and award the winner (only the requester may).
-    pub fn close_auction(&self, auction_id: &str, caller: &str, now: u64) -> Result<Auction, BidError> {
+    pub fn close_auction(
+        &self,
+        auction_id: &str,
+        caller: &str,
+        now: u64,
+    ) -> Result<Auction, BidError> {
         let mut auctions = self
             .auctions
             .lock()
@@ -973,7 +994,9 @@ impl BidEngine {
             return Err(BidError::NotRequester);
         }
         if !auction.status.is_open() {
-            return Err(BidError::Closed(format!("{:?}", auction.status).to_lowercase()));
+            return Err(BidError::Closed(
+                format!("{:?}", auction.status).to_lowercase(),
+            ));
         }
         let award = finalize(auction, &self.cfg, now);
         let snapshot = auction.clone();
@@ -997,7 +1020,9 @@ impl BidEngine {
             return Err(BidError::NotRequester);
         }
         if !auction.status.is_open() {
-            return Err(BidError::Closed(format!("{:?}", auction.status).to_lowercase()));
+            return Err(BidError::Closed(
+                format!("{:?}", auction.status).to_lowercase(),
+            ));
         }
         auction.status = AuctionStatus::Cancelled;
         info!(auction = %auction_id, "auction cancelled by requester");
@@ -1067,10 +1092,7 @@ impl BidEngine {
 
     /// Most recent awards, newest first.
     pub fn recent_awards(&self, limit: usize) -> Vec<Award> {
-        let awards = self
-            .awards
-            .lock()
-            .expect("bid engine awards lock poisoned");
+        let awards = self.awards.lock().expect("bid engine awards lock poisoned");
         awards.iter().rev().take(limit).cloned().collect()
     }
 
@@ -1079,10 +1101,7 @@ impl BidEngine {
     /// `None` when that consumer never won an auction against any
     /// provider here; callers fall back to the flat rate.
     pub fn awarded_price_for(&self, requester_id: &str) -> Option<f64> {
-        let awards = self
-            .awards
-            .lock()
-            .expect("bid engine awards lock poisoned");
+        let awards = self.awards.lock().expect("bid engine awards lock poisoned");
         awards
             .iter()
             .rev()
@@ -1116,7 +1135,10 @@ impl BidEngine {
         }
         for (name, price) in [
             ("price_usd_per_gb", award.price_usd_per_gb),
-            ("winning_bid_price_usd_per_gb", award.winning_bid_price_usd_per_gb),
+            (
+                "winning_bid_price_usd_per_gb",
+                award.winning_bid_price_usd_per_gb,
+            ),
         ] {
             if !price.is_finite() || !(MIN_PRICE_USD_PER_GB..=MAX_PRICE_USD_PER_GB).contains(&price)
             {
@@ -1164,7 +1186,9 @@ fn finalize(auction: &mut Auction, cfg: &BidConfig, now: u64) -> Option<Award> {
 
     let winner = auction.bids[0].clone();
     let runner_up_price = auction.bids.get(1).map(|b| b.price_usd_per_gb);
-    let locked_price = cfg.pricing.locked_price(winner.price_usd_per_gb, runner_up_price);
+    let locked_price = cfg
+        .pricing
+        .locked_price(winner.price_usd_per_gb, runner_up_price);
 
     let award = Award {
         auction_id: auction.id.clone(),
@@ -1274,7 +1298,9 @@ mod tests {
     #[test]
     fn create_and_get_auction() {
         let eng = engine();
-        let a = eng.create_auction(create_req(1.0, 30), "consumer-1", 1_000).unwrap();
+        let a = eng
+            .create_auction(create_req(1.0, 30), "consumer-1", 1_000)
+            .unwrap();
         assert_eq!(a.status, AuctionStatus::Open);
         assert_eq!(a.closes_at, 1_030);
         assert_eq!(eng.get_auction(&a.id).unwrap().id, a.id);
@@ -1291,7 +1317,9 @@ mod tests {
             eng.create_auction(create_req(1.0, 30), "bad-peer", 0),
             Err(BidError::Blocked)
         );
-        let a = eng.create_auction(create_req(1.0, 30), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(1.0, 30), "consumer-1", 0)
+            .unwrap();
         assert_eq!(
             eng.submit_bid(&a.id, "bad-peer", 0.5, 0.0, 0.0, 0),
             Err(BidError::Blocked)
@@ -1301,12 +1329,17 @@ mod tests {
     #[test]
     fn submit_bid_validates_budget_and_duplicates() {
         let eng = engine();
-        let a = eng.create_auction(create_req(1.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(1.0, 60), "consumer-1", 0)
+            .unwrap();
 
         // Over budget
         assert_eq!(
             eng.submit_bid(&a.id, "p1", 1.5, 0.5, 50.0, 1),
-            Err(BidError::BudgetExceeded { price: 1.5, cap: 1.0 })
+            Err(BidError::BudgetExceeded {
+                price: 1.5,
+                cap: 1.0
+            })
         );
         // Non-finite / zero / negative
         assert!(matches!(
@@ -1337,7 +1370,9 @@ mod tests {
     #[test]
     fn vickrey_pays_competitive_second_price() {
         let eng = engine();
-        let a = eng.create_auction(create_req(2.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 60), "consumer-1", 0)
+            .unwrap();
         // Quality winner bids lower than the runner-up…
         eng.submit_bid(&a.id, "winner", 0.6, 0.9, 20.0, 1).unwrap();
         eng.submit_bid(&a.id, "runner", 0.9, 0.9, 20.0, 2).unwrap();
@@ -1356,7 +1391,9 @@ mod tests {
     #[test]
     fn vickrey_quality_winner_bid_above_runner_keeps_own_price() {
         let eng = engine();
-        let a = eng.create_auction(create_req(2.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 60), "consumer-1", 0)
+            .unwrap();
         // Quality winner bid 0.8; runner-up asked cheaper 0.3 but lost on
         // quality. Locked price must not drop below the winner's bid.
         eng.submit_bid(&a.id, "solid", 0.8, 1.0, 10.0, 1).unwrap();
@@ -1375,7 +1412,9 @@ mod tests {
             ..Default::default()
         };
         let eng = BidEngine::new(cfg);
-        let a = eng.create_auction(create_req(2.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 60), "consumer-1", 0)
+            .unwrap();
         eng.submit_bid(&a.id, "winner", 0.6, 0.9, 20.0, 1).unwrap();
         eng.submit_bid(&a.id, "runner", 0.9, 0.9, 20.0, 2).unwrap();
         let closed = eng.close_auction(&a.id, "consumer-1", 10).unwrap();
@@ -1387,7 +1426,9 @@ mod tests {
     #[test]
     fn sole_bidder_pays_own_price() {
         let eng = engine();
-        let a = eng.create_auction(create_req(2.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 60), "consumer-1", 0)
+            .unwrap();
         eng.submit_bid(&a.id, "solo", 0.4, 0.8, 30.0, 1).unwrap();
         let closed = eng.close_auction(&a.id, "consumer-1", 5).unwrap();
         let award = closed.award.unwrap();
@@ -1399,7 +1440,9 @@ mod tests {
     #[test]
     fn no_bids_expires_without_award() {
         let eng = engine();
-        let a = eng.create_auction(create_req(2.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 60), "consumer-1", 0)
+            .unwrap();
         let closed = eng.close_auction(&a.id, "consumer-1", 5).unwrap();
         assert_eq!(closed.status, AuctionStatus::Expired);
         assert!(closed.award.is_none());
@@ -1409,12 +1452,17 @@ mod tests {
     #[test]
     fn close_and_cancel_require_requester() {
         let eng = engine();
-        let a = eng.create_auction(create_req(2.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 60), "consumer-1", 0)
+            .unwrap();
         assert_eq!(
             eng.close_auction(&a.id, "mallory", 5),
             Err(BidError::NotRequester)
         );
-        assert_eq!(eng.cancel_auction(&a.id, "mallory"), Err(BidError::NotRequester));
+        assert_eq!(
+            eng.cancel_auction(&a.id, "mallory"),
+            Err(BidError::NotRequester)
+        );
 
         let cancelled = eng.cancel_auction(&a.id, "consumer-1").unwrap();
         assert_eq!(cancelled.status, AuctionStatus::Cancelled);
@@ -1433,9 +1481,12 @@ mod tests {
     #[test]
     fn quality_adjusted_winner_beats_cheap_flaky_bid() {
         let eng = engine();
-        let a = eng.create_auction(create_req(2.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 60), "consumer-1", 0)
+            .unwrap();
         // Cheap but zero reputation + terrible latency
-        eng.submit_bid(&a.id, "cheap-flaky", 0.10, 0.0, 900.0, 1).unwrap();
+        eng.submit_bid(&a.id, "cheap-flaky", 0.10, 0.0, 900.0, 1)
+            .unwrap();
         // Fair price, excellent reputation + latency
         eng.submit_bid(&a.id, "solid", 0.50, 1.0, 10.0, 2).unwrap();
         let closed = eng.close_auction(&a.id, "consumer-1", 5).unwrap();
@@ -1449,7 +1500,9 @@ mod tests {
     #[test]
     fn expire_stale_finalizes_past_deadline() {
         let eng = engine();
-        let a = eng.create_auction(create_req(2.0, 10), "consumer-1", 100).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 10), "consumer-1", 100)
+            .unwrap();
         eng.submit_bid(&a.id, "p1", 0.5, 0.7, 40.0, 105).unwrap();
 
         // Before deadline: nothing finalized
@@ -1469,7 +1522,9 @@ mod tests {
     #[test]
     fn bid_after_deadline_rejected_even_before_sweeper() {
         let eng = engine();
-        let a = eng.create_auction(create_req(2.0, 10), "consumer-1", 100).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 10), "consumer-1", 100)
+            .unwrap();
         assert!(matches!(
             eng.submit_bid(&a.id, "p1", 0.5, 0.7, 40.0, 110),
             Err(BidError::Closed(_))
@@ -1481,7 +1536,9 @@ mod tests {
         let eng = engine();
         assert_eq!(eng.awarded_price_for("consumer-1"), None);
 
-        let a = eng.create_auction(create_req(2.0, 60), "consumer-1", 0).unwrap();
+        let a = eng
+            .create_auction(create_req(2.0, 60), "consumer-1", 0)
+            .unwrap();
         eng.submit_bid(&a.id, "p1", 0.7, 0.8, 30.0, 1).unwrap();
         eng.close_auction(&a.id, "consumer-1", 5).unwrap();
         // Lookup is by auction requester (the receipt counterparty).
@@ -1564,7 +1621,9 @@ mod tests {
         let ed_pk =
             libp2p_identity::ed25519::PublicKey::try_from_bytes(&sk.verifying_key().to_bytes())
                 .expect("verifying key bytes");
-        let peer = libp2p_identity::PublicKey::from(ed_pk).to_peer_id().to_string();
+        let peer = libp2p_identity::PublicKey::from(ed_pk)
+            .to_peer_id()
+            .to_string();
         (sk, peer)
     }
 
@@ -1670,10 +1729,7 @@ mod tests {
         assert_eq!(region.strip_prefix("auction/"), None);
         assert_eq!(region.strip_prefix("auctions/"), Some("us-west"));
 
-        assert_eq!(
-            award_key("c1", "w1").strip_prefix("award/"),
-            Some("c1/w1")
-        );
+        assert_eq!(award_key("c1", "w1").strip_prefix("award/"), Some("c1/w1"));
     }
 
     #[test]
@@ -1683,7 +1739,9 @@ mod tests {
         assert_eq!(decode_auction_index(&bytes).expect("decode"), ids);
 
         // Encode refuses oversized lists.
-        let too_many: Vec<String> = (0..MAX_AUCTION_INDEX_IDS + 1).map(|i| format!("a{i}")).collect();
+        let too_many: Vec<String> = (0..MAX_AUCTION_INDEX_IDS + 1)
+            .map(|i| format!("a{i}"))
+            .collect();
         assert!(encode_auction_index(&too_many).is_err());
 
         // Decode dedupes, then caps at the decode ceiling.
@@ -1693,7 +1751,12 @@ mod tests {
             vec!["auc-1".to_string(), "auc-2".to_string()]
         );
         let big: Vec<String> = (0..200).map(|i| format!("auc-{i}")).collect();
-        assert_eq!(decode_auction_index(&serde_json::to_vec(&big).unwrap()).unwrap().len(), MAX_AUCTION_INDEX_IDS_DECODE);
+        assert_eq!(
+            decode_auction_index(&serde_json::to_vec(&big).unwrap())
+                .unwrap()
+                .len(),
+            MAX_AUCTION_INDEX_IDS_DECODE
+        );
 
         // Bad ids and non-arrays are rejected outright.
         let bad = serde_json::to_vec(&["auc/../x"]).unwrap();
@@ -1756,8 +1819,14 @@ mod tests {
     fn signed_bid_round_trip() {
         let (sk, peer) = bidder();
         let sig = sign_bid(&sk, "auc-1", 0.42);
-        let derived = verify_signed_bid("auc-1", 0.42, &peer, &base64_encode(&sk.verifying_key().to_bytes()), &sig)
-            .expect("valid signature");
+        let derived = verify_signed_bid(
+            "auc-1",
+            0.42,
+            &peer,
+            &base64_encode(&sk.verifying_key().to_bytes()),
+            &sig,
+        )
+        .expect("valid signature");
         assert_eq!(derived, peer);
     }
 
@@ -1832,8 +1901,10 @@ mod tests {
 
         let req = create_req(1.0, 30);
         let auction = eng.create_auction(req, "peer-consumer", 1_000).unwrap();
-        eng.submit_bid(&auction.id, "peer-me", 0.5, 0.5, 50.0, 1_001).unwrap();
-        eng.close_auction(&auction.id, "peer-consumer", 1_002).unwrap();
+        eng.submit_bid(&auction.id, "peer-me", 0.5, 0.5, 50.0, 1_001)
+            .unwrap();
+        eng.close_auction(&auction.id, "peer-consumer", 1_002)
+            .unwrap();
 
         let (batch, cursor) = eng.awards_from(0);
         assert_eq!(batch.len(), 1);

@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use clap::Subcommand;
 use serde::Deserialize;
 
-use super::config::{EchoHome, daemon_addr};
+use super::config::{daemon_addr, EchoHome};
 use super::daemon::{get_json, post_json};
 
 #[derive(Debug, Subcommand)]
@@ -88,10 +88,7 @@ async fn auctions(addr: &str) -> Result<()> {
     }
 
     let now = now_secs();
-    let (open, closed): (Vec<_>, Vec<_>) = resp
-        .auctions
-        .iter()
-        .partition(|a| a.status == "open");
+    let (open, closed): (Vec<_>, Vec<_>) = resp.auctions.iter().partition(|a| a.status == "open");
 
     if !open.is_empty() {
         println!("open auctions ({}):", open.len());
@@ -115,12 +112,22 @@ async fn auctions(addr: &str) -> Result<()> {
             let locked = a
                 .award
                 .as_ref()
-                .map(|aw| format!("locked {:.2} $/GB → {}", aw.price_usd_per_gb, short(&aw.provider_peer_id)))
+                .map(|aw| {
+                    format!(
+                        "locked {:.2} $/GB → {}",
+                        aw.price_usd_per_gb,
+                        short(&aw.provider_peer_id)
+                    )
+                })
                 .unwrap_or_else(|| "no bids".to_string());
             println!("  {}  {}  {}  {locked}", a.id, a.region, a.status);
             if a.bids.len() > 1 {
                 for b in &a.bids {
-                    println!("      bid {:.2} $/GB by {}", b.price_usd_per_gb, short(&b.provider_peer_id));
+                    println!(
+                        "      bid {:.2} $/GB by {}",
+                        b.price_usd_per_gb,
+                        short(&b.provider_peer_id)
+                    );
                 }
             }
         }
@@ -133,15 +140,19 @@ async fn bid(addr: &str, auction_id: &str, price: f64) -> Result<()> {
         bail!("--price must be a non-negative finite USD/GB amount");
     }
     let path = format!("/auctions/{auction_id}/bid");
-    let (status, body) = post_json(addr, &path, &serde_json::json!({
-        "price_usd_per_gb": price,
-    }))
+    let (status, body) = post_json(
+        addr,
+        &path,
+        &serde_json::json!({
+            "price_usd_per_gb": price,
+        }),
+    )
     .await?;
     if status != 200 {
         bail!("bid rejected ({status}): {}", body.trim());
     }
-    let bid: BidResponse = serde_json::from_str(&body)
-        .map_err(|e| anyhow::anyhow!("parsing bid response: {e}"))?;
+    let bid: BidResponse =
+        serde_json::from_str(&body).map_err(|e| anyhow::anyhow!("parsing bid response: {e}"))?;
     println!(
         "bid submitted — {:.2} $/GB on {} by {} (bid {})",
         bid.price_usd_per_gb,

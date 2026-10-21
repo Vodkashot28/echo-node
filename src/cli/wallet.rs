@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-use super::config::{EchoHome, daemon_addr};
+use super::config::{daemon_addr, EchoHome};
 
 #[derive(Debug, Deserialize)]
 struct SettlementsResponse {
@@ -57,7 +57,10 @@ pub async fn run(home: &EchoHome) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("parsing {url}: {e}"))?;
 
     println!("wallet — {addr}");
-    println!("  {:<18} {}", "receipts settled", view.summary.receipts_settled);
+    println!(
+        "  {:<18} {}",
+        "receipts settled", view.summary.receipts_settled
+    );
     println!(
         "  {:<18} {:.2} MiB ({} bytes)",
         "total relayed",

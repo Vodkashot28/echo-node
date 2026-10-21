@@ -242,7 +242,9 @@ pub fn verify_event<T: Serialize + DeserializeOwned>(event: &LedgerEvent<T>) -> 
         return Ok(false);
     }
     let pk = base64_decode(&event.signature.public_key);
-    let pk: [u8; 32] = pk.try_into().map_err(|_| anyhow::anyhow!("bad public key length"))?;
+    let pk: [u8; 32] = pk
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("bad public key length"))?;
     let vk = VerifyingKey::from_bytes(&pk).context("invalid public key")?;
     let sig = base64_decode(&event.signature.signature);
     let sig = Signature::from_slice(&sig).context("invalid signature length")?;
@@ -483,7 +485,10 @@ async fn run_ledger_writer(
         let digest = match digest_bytes(&hash) {
             Some(d) => d,
             None => {
-                error!(event_id, "ledger writer: computed digest malformed; dropping");
+                error!(
+                    event_id,
+                    "ledger writer: computed digest malformed; dropping"
+                );
                 continue;
             }
         };
@@ -632,9 +637,7 @@ mod tests {
         assert!(id.starts_with("evt_"));
         let body = &id[4..];
         assert_eq!(body.len(), 26);
-        assert!(body
-            .chars()
-            .all(|c| CROCKFORD.contains(&(c as u8))));
+        assert!(body.chars().all(|c| CROCKFORD.contains(&(c as u8))));
     }
 
     #[test]
@@ -688,14 +691,7 @@ mod tests {
         // Tampering with the signature must not change the *recomputed*
         // hash — but verification must then fail.
         let key = test_key(2);
-        let mut ev = build(
-            &key,
-            "evt_B",
-            7,
-            None,
-            None,
-            serde_json::json!({"x": 1}),
-        );
+        let mut ev = build(&key, "evt_B", 7, None, None, serde_json::json!({"x": 1}));
         let original = ev.hash.clone();
         ev.signature.signature = base64_encode(&[0u8; 64]);
         assert!(
@@ -716,7 +712,10 @@ mod tests {
             None,
             serde_json::json!({"winner": "providerA"}),
         );
-        assert!(verify_event(&ev).expect("verify runs"), "valid event failed verification");
+        assert!(
+            verify_event(&ev).expect("verify runs"),
+            "valid event failed verification"
+        );
 
         let mut tampered = ev.clone();
         tampered.payload = serde_json::json!({"winner": "providerB"});
@@ -772,8 +771,14 @@ mod tests {
             Some(&genesis.hash),
             serde_json::json!({"step": "second"}),
         );
-        assert_eq!(second.provenance.prev_hash.as_deref(), Some(genesis.hash.as_str()));
-        assert_eq!(second.provenance.root_hash.as_deref(), Some(genesis.hash.as_str()));
+        assert_eq!(
+            second.provenance.prev_hash.as_deref(),
+            Some(genesis.hash.as_str())
+        );
+        assert_eq!(
+            second.provenance.root_hash.as_deref(),
+            Some(genesis.hash.as_str())
+        );
         assert!(verify_event(&second).expect("verify runs"));
 
         // Mutating the chain link invalidates the hash.

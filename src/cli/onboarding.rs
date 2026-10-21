@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use echo_daemon::identity::NodeIdentity;
 
-use super::config::{EchoHome, NodeConfig, OnboardStage, derive_provider_id, daemon_addr};
+use super::config::{daemon_addr, derive_provider_id, EchoHome, NodeConfig, OnboardStage};
 use super::daemon;
 use super::status::{MetricsResponse, StatusResponse};
 
@@ -106,10 +106,7 @@ pub async fn run(home: &EchoHome, offline: bool, reset: bool) -> Result<()> {
     }
 
     if start > STEPS.len() as u8 {
-        println!(
-            "onboarding already complete — stage {}",
-            cfg.onboard_stage
-        );
+        println!("onboarding already complete — stage {}", cfg.onboard_stage);
         return Ok(());
     }
 
@@ -164,8 +161,7 @@ async fn step(n: u8, home: &EchoHome, cfg: &mut NodeConfig, offline: bool) -> Re
             Ok(())
         }
         2 => {
-            let identity =
-                NodeIdentity::load_or_generate(&home.identity_path(), &cfg.region)?;
+            let identity = NodeIdentity::load_or_generate(&home.identity_path(), &cfg.region)?;
             advance(
                 home,
                 cfg,
@@ -245,8 +241,7 @@ async fn step(n: u8, home: &EchoHome, cfg: &mut NodeConfig, offline: bool) -> Re
             // `/metrics` answers 503 until the first heartbeat sample lands —
             // poll briefly instead of failing a fresh daemon.
             let m: MetricsResponse = {
-                let deadline =
-                    tokio::time::Instant::now() + Duration::from_secs(METRICS_WAIT_SECS);
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(METRICS_WAIT_SECS);
                 loop {
                     match daemon::get_json(&addr, "/metrics").await {
                         Ok(m) => break m,
@@ -312,11 +307,7 @@ async fn step(n: u8, home: &EchoHome, cfg: &mut NodeConfig, offline: bool) -> Re
 ///
 /// Any transport/HTTP/parse problem is an `Err` the caller downgrades to a
 /// local claim (see `step` 3).
-async fn claim(
-    cfg: &NodeConfig,
-    peer_id: &str,
-    offline: bool,
-) -> Result<Option<String>> {
+async fn claim(cfg: &NodeConfig, peer_id: &str, offline: bool) -> Result<Option<String>> {
     if offline {
         return Ok(None);
     }
@@ -356,8 +347,8 @@ async fn claim(
 /// silently rotate keys).
 fn read_identity(home: &EchoHome) -> Result<NodeIdentity> {
     let path = home.identity_path();
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 

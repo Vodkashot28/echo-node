@@ -1,10 +1,10 @@
 use echo_daemon::auth::{require_scope, ApiKeyRegistry, AuthGate, Scope};
 use echo_daemon::availability::AvailabilityEngine;
 use echo_daemon::bidding::{
-    award_key, auction_key, decode_auction_index, encode_auction_index, host_index_key,
-    region_providers_key, sign_bid, verify_signed_bid, Auction, AuctionBook, AuctionRecord, AuctionStatus,
-    Award, Bid, BidConfig, BidEngine, BidError, CreateAuction, SubmitBid, MAX_AUCTION_INDEX_IDS,
-    MAX_AUCTION_WINDOW_SECS, MAX_PRICE_USD_PER_GB, MIN_PRICE_USD_PER_GB,
+    auction_key, award_key, decode_auction_index, encode_auction_index, host_index_key,
+    region_providers_key, sign_bid, verify_signed_bid, Auction, AuctionBook, AuctionRecord,
+    AuctionStatus, Award, Bid, BidConfig, BidEngine, BidError, CreateAuction, SubmitBid,
+    MAX_AUCTION_INDEX_IDS, MAX_AUCTION_WINDOW_SECS, MAX_PRICE_USD_PER_GB, MIN_PRICE_USD_PER_GB,
 };
 use echo_daemon::consumer::run_consumer_listener;
 use echo_daemon::discovery::{DiscoveryCommand, DiscoveryConfig, DiscoveryService};
@@ -21,8 +21,7 @@ use echo_daemon::sqlite_store;
 use echo_daemon::tunnel::TunnelService;
 use echo_daemon::{
     telemetry::{self, DashboardConfig, DashboardReporter, DashboardTelemetry, FeatureInputs},
-    MetricsBackend, NetworkMetricsRow, NodeIntelligenceRow, NodeMetricsRow,
-    NodeRow, StateReceipt,
+    MetricsBackend, NetworkMetricsRow, NodeIntelligenceRow, NodeMetricsRow, NodeRow, StateReceipt,
 };
 
 use anyhow::{Context, Result};
@@ -156,9 +155,8 @@ struct Config {
 impl Config {
     fn from_env() -> Self {
         Self {
-            node_id: std::env::var("NODE_ID").unwrap_or_else(|_| {
-                format!("node-{}", now_epoch_secs())
-            }),
+            node_id: std::env::var("NODE_ID")
+                .unwrap_or_else(|_| format!("node-{}", now_epoch_secs())),
             user_id: std::env::var("USER_ID").unwrap_or_else(|_| "anonymous".to_string()),
             node_name: std::env::var("NODE_NAME").unwrap_or_else(|_| "EchoNode".to_string()),
             region: std::env::var("NODE_REGION").unwrap_or_else(|_| "auto".to_string()),
@@ -166,9 +164,12 @@ impl Config {
                 std::env::var("LISTEN_ADDR").ok(),
                 std::env::var("PORT").ok(),
             ),
-            db_path: std::env::var("SQLITE_DB").unwrap_or_else(|_| "sqlite:echo_node.db".to_string()),
-            tunnel_listen_addr: std::env::var("TUNNEL_ADDR").unwrap_or_else(|_| "0.0.0.0:3002".to_string()),
-            relay_target: std::env::var("RELAY_TARGET").unwrap_or_else(|_| "127.0.0.1:80".to_string()),
+            db_path: std::env::var("SQLITE_DB")
+                .unwrap_or_else(|_| "sqlite:echo_node.db".to_string()),
+            tunnel_listen_addr: std::env::var("TUNNEL_ADDR")
+                .unwrap_or_else(|_| "0.0.0.0:3002".to_string()),
+            relay_target: std::env::var("RELAY_TARGET")
+                .unwrap_or_else(|_| "127.0.0.1:80".to_string()),
             ping_targets: std::env::var("PING_TARGETS")
                 .unwrap_or_else(|_| DEFAULT_PING_TARGETS.join(","))
                 .split(',')
@@ -181,13 +182,22 @@ impl Config {
             heartbeat_secs: env_u64("HEARTBEAT_SECS", DEFAULT_HEARTBEAT_SECS),
             metrics_window: env_usize("METRICS_WINDOW", DEFAULT_METRICS_WINDOW),
             ru_per_second: env_f64("RU_PER_SECOND", DEFAULT_RU_PER_SECOND),
-            capability_publish_interval_secs: env_u64("CAPABILITY_PUBLISH_INTERVAL_SECS", DEFAULT_CAPABILITY_PUBLISH_INTERVAL_SECS),
+            capability_publish_interval_secs: env_u64(
+                "CAPABILITY_PUBLISH_INTERVAL_SECS",
+                DEFAULT_CAPABILITY_PUBLISH_INTERVAL_SECS,
+            ),
             retention_days: env_i64("RETENTION_DAYS", DEFAULT_RETENTION_DAYS),
             earnings_per_ru: env_f64("EARNINGS_PER_RU", DEFAULT_EARNINGS_PER_RU),
-            unhealthy_threshold_secs: env_u64("UNHEALTHY_THRESHOLD_SECS", DEFAULT_UNHEALTHY_THRESHOLD_SECS),
+            unhealthy_threshold_secs: env_u64(
+                "UNHEALTHY_THRESHOLD_SECS",
+                DEFAULT_UNHEALTHY_THRESHOLD_SECS,
+            ),
             receipt_interval_packets: env_u64("RECEIPT_INTERVAL_PACKETS", 100),
             receipt_min_bytes: env_u64("RECEIPT_MIN_BYTES", 1_000_000),
-            settlement_rate_usd_per_gb: env_f64("SETTLEMENT_RATE_USD_PER_GB", DEFAULT_SETTLEMENT_RATE_USD_PER_GB),
+            settlement_rate_usd_per_gb: env_f64(
+                "SETTLEMENT_RATE_USD_PER_GB",
+                DEFAULT_SETTLEMENT_RATE_USD_PER_GB,
+            ),
             identity_path: PathBuf::from(
                 std::env::var("IDENTITY_PATH").unwrap_or_else(|_| "data/identity.json".to_string()),
             ),
@@ -201,8 +211,12 @@ impl Config {
                 .to_ascii_lowercase(),
             consumer_listen_addr: std::env::var("CONSUMER_LISTEN_ADDR")
                 .unwrap_or_else(|_| DEFAULT_CONSUMER_LISTEN_ADDR.to_string()),
-            provider_addr: std::env::var("PROVIDER_ADDR").ok().filter(|v| !v.is_empty()),
-            provider_peer_id: std::env::var("PROVIDER_PEER_ID").ok().filter(|v| !v.is_empty()),
+            provider_addr: std::env::var("PROVIDER_ADDR")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            provider_peer_id: std::env::var("PROVIDER_PEER_ID")
+                .ok()
+                .filter(|v| !v.is_empty()),
             provider_noise_pubkey: std::env::var("PROVIDER_NOISE_PUBKEY")
                 .ok()
                 .filter(|v| !v.is_empty()),
@@ -237,9 +251,7 @@ fn redact_url_credentials(url: &str) -> String {
         return url.to_string();
     };
     let (scheme, rest) = url.split_at(scheme_idx + 3);
-    let authority_end = rest
-        .find(['/', '?', '#'])
-        .unwrap_or(rest.len());
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     match rest[..authority_end].find('@') {
         Some(at) => format!("{scheme}***@{}", &rest[at + 1..]),
         None => url.to_string(),
@@ -247,7 +259,10 @@ fn redact_url_credentials(url: &str) -> String {
 }
 
 fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 /// Parse a bandwidth/capacity env var (Mbps). Unset → `default` (silent).
@@ -272,16 +287,28 @@ fn env_bandwidth(key: &str, default: f64) -> f64 {
     }
 }
 fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 fn env_i64(key: &str, default: i64) -> i64 {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 fn env_u32(key: &str, default: u32) -> u32 {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 fn env_usize(key: &str, default: usize) -> usize {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -691,8 +718,8 @@ fn compute_trust_score(
     };
     let loss_penalty = (packet_loss_pct / 100.0) * 0.5;
 
-    let raw = (quality_factor * 0.4 + uptime_factor * 0.3 + consistency_factor * 0.3)
-        - loss_penalty;
+    let raw =
+        (quality_factor * 0.4 + uptime_factor * 0.3 + consistency_factor * 0.3) - loss_penalty;
     (raw.clamp(0.0, 1.0) * 100.0).round() / 100.0
 }
 
@@ -748,11 +775,10 @@ async fn heartbeat(
             st.ping_targets.clone()
         };
 
-        let (latency_ms, packet_loss_pct) = tokio::task::spawn_blocking(move || {
-            measure_latency_and_loss_sync(&ping_targets)
-        })
-        .await
-        .unwrap_or((999.0, 100.0));
+        let (latency_ms, packet_loss_pct) =
+            tokio::task::spawn_blocking(move || measure_latency_and_loss_sync(&ping_targets))
+                .await
+                .unwrap_or((999.0, 100.0));
 
         // Feed the latest latency sample into the availability engine so
         // the capability descriptor reports a real avg_latency_ms.
@@ -787,13 +813,8 @@ async fn heartbeat(
 
         let uptime_secs = st.start_time.elapsed().as_secs();
 
-        let quality_score = compute_quality_score(
-            avg_latency,
-            packet_loss_pct,
-            cpu_pct,
-            mem_pct,
-            uptime_secs,
-        );
+        let quality_score =
+            compute_quality_score(avg_latency, packet_loss_pct, cpu_pct, mem_pct, uptime_secs);
         let trust_score = compute_trust_score(
             quality_score,
             uptime_secs,
@@ -935,9 +956,12 @@ async fn heartbeat(
         } else {
             0.0
         };
-        let anomaly_score =
-            (loss_anomaly * 0.3 + latency_anomaly * 0.3 + cpu_anomaly + quality_anomaly + disk_anomaly)
-                .min(1.0);
+        let anomaly_score = (loss_anomaly * 0.3
+            + latency_anomaly * 0.3
+            + cpu_anomaly
+            + quality_anomaly
+            + disk_anomaly)
+            .min(1.0);
 
         let intel = NodeIntelligenceRow {
             node_id: st.node_id.clone(),
@@ -993,9 +1017,7 @@ async fn heartbeat(
     }
 }
 
-async fn handle_metrics(
-    State(app): State<AppState>,
-) -> Result<Json<DaemonMetrics>, StatusCode> {
+async fn handle_metrics(State(app): State<AppState>) -> Result<Json<DaemonMetrics>, StatusCode> {
     let st = app.metrics.read().await;
     st.metrics_history
         .back()
@@ -1004,9 +1026,7 @@ async fn handle_metrics(
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)
 }
 
-async fn handle_nodes(
-    State(app): State<AppState>,
-) -> Json<Vec<DaemonNode>> {
+async fn handle_nodes(State(app): State<AppState>) -> Json<Vec<DaemonNode>> {
     let st = app.metrics.read().await;
     let uptime = st.start_time.elapsed().as_secs();
     let metrics = st.metrics_history.back().cloned();
@@ -1023,9 +1043,7 @@ async fn handle_nodes(
         cpu_pct: metrics.as_ref().map_or(0.0, |m| m.cpu_pct),
         memory_pct: metrics.as_ref().map_or(0.0, |m| m.memory_pct),
         latency_ms: metrics.as_ref().map_or(0.0, |m| m.latency_ms),
-        bandwidth_down_mbps: metrics
-            .as_ref()
-            .map_or(0.0, |m| m.bandwidth_down_mbps),
+        bandwidth_down_mbps: metrics.as_ref().map_or(0.0, |m| m.bandwidth_down_mbps),
         bandwidth_up_mbps: metrics.as_ref().map_or(0.0, |m| m.bandwidth_up_mbps),
         packet_loss_pct: metrics.as_ref().map_or(0.0, |m| m.packet_loss_pct),
         quality_score: metrics.as_ref().map_or(0.0, |m| m.quality_score),
@@ -1040,16 +1058,12 @@ async fn handle_nodes(
     Json(vec![node])
 }
 
-async fn handle_history(
-    State(app): State<AppState>,
-) -> Json<Vec<DaemonMetrics>> {
+async fn handle_history(State(app): State<AppState>) -> Json<Vec<DaemonMetrics>> {
     let st = app.metrics.read().await;
     Json(st.metrics_history.iter().cloned().collect())
 }
 
-async fn handle_status(
-    State(app): State<AppState>,
-) -> Json<DaemonStatus> {
+async fn handle_status(State(app): State<AppState>) -> Json<DaemonStatus> {
     let st = app.metrics.read().await;
     Json(DaemonStatus {
         running: st.running,
@@ -1136,9 +1150,7 @@ async fn handle_control(
     Ok(Json(response))
 }
 
-async fn handle_health(
-    State(app): State<AppState>,
-) -> Json<HealthResponse> {
+async fn handle_health(State(app): State<AppState>) -> Json<HealthResponse> {
     let st = app.metrics.read().await;
     let db_status = if st.db_connected { "ok" } else { "degraded" };
 
@@ -1173,22 +1185,14 @@ async fn handle_health(
 async fn handle_settlements(
     State(app): State<AppState>,
 ) -> Result<Json<SettlementView>, StatusCode> {
-    let summary = app
-        .settlement
-        .summary()
-        .await
-        .map_err(|e| {
-            error!(error = %e, "failed to load settlement summary");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    let receipts = app
-        .settlement
-        .settlements(100)
-        .await
-        .map_err(|e| {
-            error!(error = %e, "failed to load settlements");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let summary = app.settlement.summary().await.map_err(|e| {
+        error!(error = %e, "failed to load settlement summary");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let receipts = app.settlement.settlements(100).await.map_err(|e| {
+        error!(error = %e, "failed to load settlements");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     Ok(Json(SettlementView {
         summary,
         settlements: receipts,
@@ -1335,7 +1339,9 @@ fn bid_err_to_http(err: BidError) -> (StatusCode, String) {
     let status = match &err {
         BidError::Invalid(_) | BidError::BudgetExceeded { .. } => StatusCode::BAD_REQUEST,
         BidError::NotFound(_) => StatusCode::NOT_FOUND,
-        BidError::Closed(_) | BidError::DuplicateBid | BidError::TooManyBids => StatusCode::CONFLICT,
+        BidError::Closed(_) | BidError::DuplicateBid | BidError::TooManyBids => {
+            StatusCode::CONFLICT
+        }
         BidError::NotRequester | BidError::Blocked => StatusCode::FORBIDDEN,
     };
     (status, err.to_string())
@@ -1437,8 +1443,7 @@ async fn handle_submit_bid(
         // Remote signed bid: all three fields or none.
         if !signed.iter().all(|&p| p) {
             return Err(bid_err_to_http(BidError::Invalid(
-                "signed bid requires provider_peer_id, public_key and signature together"
-                    .into(),
+                "signed bid requires provider_peer_id, public_key and signature together".into(),
             )));
         }
         let peer = verify_signed_bid(
@@ -1492,7 +1497,14 @@ async fn handle_submit_bid(
     };
     let bid = app
         .bid_engine
-        .submit_bid(&id, &peer, req.price_usd_per_gb, reputation, latency_ms, now_epoch_secs())
+        .submit_bid(
+            &id,
+            &peer,
+            req.price_usd_per_gb,
+            reputation,
+            latency_ms,
+            now_epoch_secs(),
+        )
         .map_err(bid_err_to_http)?;
 
     // Persist the bid so the auction's price history survives a restart.
@@ -1640,7 +1652,9 @@ async fn shutdown_signal() {
     #[cfg(unix)]
     let terminate = async {
         match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => { sig.recv().await; }
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
             Err(e) => {
                 error!(error = %e, "failed to install SIGTERM handler");
                 std::future::pending::<()>().await;
@@ -1713,22 +1727,26 @@ async fn run_daemon() -> Result<()> {
 
     // Step 1: Load or generate node identity
     let identity = NodeIdentity::load_or_generate(&config.identity_path, &config.region)?;
-    info!(
-        peer_id = identity.peer_id_str(),
-        "node identity loaded"
-    );
+    info!(peer_id = identity.peer_id_str(), "node identity loaded");
 
     // Step 2: Initialize database backend
     let backend: Arc<dyn MetricsBackend> = if let Some(url) = &config.database_url {
         info!(backend = "neon", url = %redact_url_credentials(url), "database backend initialized");
-        Arc::new(neon::NeonStore::with_config(
-            url,
-            config.neon_max_connections,
-            config.neon_acquire_timeout_secs,
-            config.neon_idle_timeout_secs,
-        ).await?)
+        Arc::new(
+            neon::NeonStore::with_config(
+                url,
+                config.neon_max_connections,
+                config.neon_acquire_timeout_secs,
+                config.neon_idle_timeout_secs,
+            )
+            .await?,
+        )
     } else {
-        info!(backend = "sqlite", reason = "DATABASE_URL not set", "database backend initialized");
+        info!(
+            backend = "sqlite",
+            reason = "DATABASE_URL not set",
+            "database backend initialized"
+        );
         Arc::new(sqlite_store::SqliteStore::new(&config.db_path).await?)
     };
 
@@ -2127,7 +2145,10 @@ async fn run_daemon() -> Result<()> {
             .parse()
             .context("PROVIDER_PEER_ID is not a valid libp2p PeerId")?;
         let provider_noise_pubkey = echo_daemon::base64_decode(
-            config.provider_noise_pubkey.as_deref().expect("validated above"),
+            config
+                .provider_noise_pubkey
+                .as_deref()
+                .expect("validated above"),
         );
         if provider_noise_pubkey.len() != NOISE_PUBKEY_LEN {
             anyhow::bail!(
@@ -2159,15 +2180,13 @@ async fn run_daemon() -> Result<()> {
     // Step 5: Initialize discovery (libp2p swarm) — DHT_* env config:
     // bootstrap peers, network id namespace, optional local-only dev mode.
     let discovery_config = DiscoveryConfig::from_env();
-    let (mut discovery, discovery_cmd, mut discovery_rx) = DiscoveryService::new(
-        &identity,
-        &discovery_config,
-    )
-    .await
-    .map_err(|e| {
-        error!(error = %e, "discovery init failed");
-        anyhow::anyhow!("discovery init failed: {}", e)
-    })?;
+    let (mut discovery, discovery_cmd, mut discovery_rx) =
+        DiscoveryService::new(&identity, &discovery_config)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "discovery init failed");
+                anyhow::anyhow!("discovery init failed: {}", e)
+            })?;
 
     info!(
         peer_id = %identity.peer_id_str(),
@@ -2271,10 +2290,7 @@ async fn run_daemon() -> Result<()> {
                     echo_daemon::discovery::DiscoveryEvent::ProvidersFound { key, providers } => {
                         // Region host lookup → chain one index fetch per host.
                         if key.strip_prefix("auctions/").is_some() {
-                            for peer in providers
-                                .into_iter()
-                                .take(MAX_DHT_PROVIDERS_PER_QUERY)
-                            {
+                            for peer in providers.into_iter().take(MAX_DHT_PROVIDERS_PER_QUERY) {
                                 let _ = cmd.send(DiscoveryCommand::GetRecord {
                                     key: host_index_key(&peer.to_string()),
                                 });
@@ -2333,7 +2349,17 @@ async fn run_daemon() -> Result<()> {
     let avail_clone = availability.clone();
     let reporter_clone = reporter.clone();
     tokio::spawn(async move {
-        heartbeat(state_clone, backend_clone, avail_clone, heartbeat_secs, metrics_window, ru_per_second, earnings_per_ru, reporter_clone).await;
+        heartbeat(
+            state_clone,
+            backend_clone,
+            avail_clone,
+            heartbeat_secs,
+            metrics_window,
+            ru_per_second,
+            earnings_per_ru,
+            reporter_clone,
+        )
+        .await;
     });
 
     // Step 7: Spawn data retention cleanup (daily)
@@ -2364,8 +2390,7 @@ async fn run_daemon() -> Result<()> {
     tokio::spawn(async move {
         loop {
             sleep(Duration::from_secs(86400)).await;
-            let cutoff_secs = chrono::Utc::now().timestamp()
-                - auction_retention_days * 86400;
+            let cutoff_secs = chrono::Utc::now().timestamp() - auction_retention_days * 86400;
             match auction_cleanup_backend
                 .cleanup_old_auctions(cutoff_secs)
                 .await
@@ -2464,9 +2489,10 @@ async fn run_daemon() -> Result<()> {
         // an imported award reprices *subsequent* settlements.
         let award_lookup_cmd = discovery_cmd.clone();
         let award_lookup_peer = identity.peer_id_str().to_string();
-        let award_cooldown = Arc::new(std::sync::Mutex::new(
-            std::collections::HashMap::<String, u64>::new(),
-        ));
+        let award_cooldown = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            u64,
+        >::new()));
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -2741,7 +2767,12 @@ async fn run_daemon() -> Result<()> {
     // price whenever it fits the auction's budget cap and capacity floor —
     // this is what turns isolated nodes into a live bidding market.
     let bid_auto = std::env::var("BID_AUTO")
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false);
     if config.node_mode == "provider" && bid_auto {
         let ask_raw = env_f64("BID_PRICE_USD_PER_GB", config.settlement_rate_usd_per_gb);
@@ -2910,7 +2941,10 @@ async fn run_daemon() -> Result<()> {
                 axum::http::Method::POST,
                 axum::http::Method::OPTIONS,
             ])
-            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+            ])
     } else {
         CorsLayer::new()
             .allow_origin(Any)
@@ -3236,10 +3270,13 @@ mod tests {
             cap("good-peer", now, 3, 10, vec![9; 32]),
         ];
 
-        let out =
-            filter_match_providers(providers, "self-peer", &blocked, now, 300);
+        let out = filter_match_providers(providers, "self-peer", &blocked, now, 300);
         let ids: Vec<_> = out.iter().map(|p| p.peer_id.as_str()).collect();
-        assert_eq!(ids, vec!["good-peer"], "only a fresh, dialable, unblocked, non-full non-self provider survives");
+        assert_eq!(
+            ids,
+            vec!["good-peer"],
+            "only a fresh, dialable, unblocked, non-full non-self provider survives"
+        );
     }
 
     #[test]
@@ -3304,7 +3341,10 @@ mod tests {
     #[test]
     fn listen_addr_falls_back_to_platform_port() {
         // Render/Heroku inject PORT; empty LISTEN_ADDR counts as unset.
-        assert_eq!(resolve_listen_addr(None, Some("10000".into())), "0.0.0.0:10000");
+        assert_eq!(
+            resolve_listen_addr(None, Some("10000".into())),
+            "0.0.0.0:10000"
+        );
         assert_eq!(
             resolve_listen_addr(Some(String::new()), Some("10000".into())),
             "0.0.0.0:10000"
@@ -3317,8 +3357,14 @@ mod tests {
 
     #[test]
     fn listen_addr_invalid_or_missing_port_uses_default() {
-        assert_eq!(resolve_listen_addr(None, Some("notaport".into())), "0.0.0.0:3001");
-        assert_eq!(resolve_listen_addr(None, Some("70000".into())), "0.0.0.0:3001");
+        assert_eq!(
+            resolve_listen_addr(None, Some("notaport".into())),
+            "0.0.0.0:3001"
+        );
+        assert_eq!(
+            resolve_listen_addr(None, Some("70000".into())),
+            "0.0.0.0:3001"
+        );
         assert_eq!(resolve_listen_addr(None, None), "0.0.0.0:3001");
     }
 
@@ -3335,7 +3381,10 @@ mod tests {
     #[test]
     fn redact_url_leaves_plain_urls_unchanged() {
         // No scheme, no userinfo, and '@' outside the authority (path) all pass through.
-        assert_eq!(redact_url_credentials("sqlite:echo_node.db"), "sqlite:echo_node.db");
+        assert_eq!(
+            redact_url_credentials("sqlite:echo_node.db"),
+            "sqlite:echo_node.db"
+        );
         assert_eq!(
             redact_url_credentials("https://example.com/functions/v1/report-telemetry"),
             "https://example.com/functions/v1/report-telemetry"

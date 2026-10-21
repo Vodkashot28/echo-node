@@ -1,7 +1,7 @@
 //! `echo-node logs path|tail` — inspect the daemon log the CLI writes to.
 
-use std::io::Write;
 use std::io::SeekFrom;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};

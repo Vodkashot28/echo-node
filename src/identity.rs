@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use ed25519_dalek::{SigningKey, Signer, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use libp2p::identity::{self, Keypair};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -152,9 +152,8 @@ impl NodeIdentity {
         let verifying_key: VerifyingKey = signing_key.verifying_key();
 
         // Derive libp2p PeerId from ed25519 secret key
-        let libp2p_keypair =
-            identity::Keypair::ed25519_from_bytes(signing_key.to_bytes().to_vec())
-                .context("failed to create libp2p keypair from ed25519")?;
+        let libp2p_keypair = identity::Keypair::ed25519_from_bytes(signing_key.to_bytes().to_vec())
+            .context("failed to create libp2p keypair from ed25519")?;
         let peer_id = libp2p_keypair.public().to_peer_id();
 
         // Generate Noise_XX static keypair (X25519)
@@ -265,7 +264,11 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(entries, vec!["identity.json".to_string()], "no temp leftovers");
+        assert_eq!(
+            entries,
+            vec!["identity.json".to_string()],
+            "no temp leftovers"
+        );
 
         // File must be valid JSON (fully written, not truncated).
         let data = std::fs::read_to_string(&path).unwrap();
@@ -303,8 +306,7 @@ mod tests {
             })
             .collect();
         assert_eq!(backups.len(), 1, "corrupt file preserved: {backups:?}");
-        let backup_data =
-            std::fs::read_to_string(dir.path().join(&backups[0])).unwrap();
+        let backup_data = std::fs::read_to_string(dir.path().join(&backups[0])).unwrap();
         assert_eq!(backup_data, r#"{"peer_id": "12D3KooWTRUNCATED"#);
     }
 
@@ -323,7 +325,11 @@ mod tests {
 
         let id = NodeIdentity::load_or_generate(&path, "eu").unwrap();
         assert_eq!(id.peer_id, "12D3KooWLegacyPeer");
-        assert_eq!(id.noise_public_key.len(), 32, "migration generated noise keys");
+        assert_eq!(
+            id.noise_public_key.len(),
+            32,
+            "migration generated noise keys"
+        );
 
         // Migration write must have persisted the keys (reload keeps them).
         let reloaded = NodeIdentity::load_or_generate(&path, "eu").unwrap();
@@ -335,6 +341,9 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains(".tmp"))
             .collect();
-        assert!(entries.is_empty(), "no temp files after migration: {entries:?}");
+        assert!(
+            entries.is_empty(),
+            "no temp files after migration: {entries:?}"
+        );
     }
 }

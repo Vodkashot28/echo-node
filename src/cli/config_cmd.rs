@@ -47,7 +47,11 @@ fn show(home: &EchoHome) -> Result<()> {
     println!(
         "config — {}{}",
         path.display(),
-        if path.exists() { "" } else { " (not written yet — defaults shown)" }
+        if path.exists() {
+            ""
+        } else {
+            " (not written yet — defaults shown)"
+        }
     );
     row("region", &cfg.region);
     row("port", cfg.port);
@@ -62,7 +66,11 @@ fn show(home: &EchoHome) -> Result<()> {
     );
     row(
         "claim_code",
-        if cfg.claim_code.is_some() { "(set)" } else { "(unset)" },
+        if cfg.claim_code.is_some() {
+            "(set)"
+        } else {
+            "(unset)"
+        },
     );
     row(
         "measured_latency_ms",

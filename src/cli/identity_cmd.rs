@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use echo_daemon::base64_encode;
 use echo_daemon::identity::NodeIdentity;
 
-use super::config::{EchoHome, derive_provider_id};
+use super::config::{derive_provider_id, EchoHome};
 
 /// Read `identity.json` and print the public-facing identity. Never writes:
 /// rotating keys is the daemon's (`load_or_generate`) job, not an inspection
@@ -18,8 +18,8 @@ pub fn run(home: &EchoHome) -> Result<()> {
             path.display()
         );
     }
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let identity: NodeIdentity =
         serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
 
@@ -62,7 +62,9 @@ pub fn run(home: &EchoHome) -> Result<()> {
         Some(recorded) if recorded == &provider_id => row("claimed as", recorded),
         Some(recorded) => {
             row("claimed as", recorded);
-            println!("  ⚠ config provider_id does not match this identity (re-run `echo-node onboard`)");
+            println!(
+                "  ⚠ config provider_id does not match this identity (re-run `echo-node onboard`)"
+            );
         }
         None => row("claimed as", "(not claimed yet — run `echo-node onboard`)"),
     }
@@ -84,7 +86,9 @@ mod tests {
         let id = derive_provider_id("12D3KooWExamplePeerId");
         assert!(id.starts_with("provider_"), "{id}");
         assert_eq!(id.len(), "provider_".len() + 16);
-        assert!(id["provider_".len()..].chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(id["provider_".len()..]
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
         // Deterministic for a fixed input.
         assert_eq!(id, derive_provider_id("12D3KooWExamplePeerId"));
     }

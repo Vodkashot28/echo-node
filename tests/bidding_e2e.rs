@@ -12,6 +12,7 @@
 //! receipts are settled — this is the seam that turns a VPN-style mesh
 //! into a bandwidth marketplace.
 
+use echo_daemon::base64_encode;
 use echo_daemon::bidding::{
     AuctionStatus, BidConfig, BidEngine, BidError, CreateAuction, PricingRule,
 };
@@ -19,7 +20,6 @@ use echo_daemon::identity::NodeIdentity;
 use echo_daemon::models::StateReceipt;
 use echo_daemon::settlement::SettlementEngine;
 use echo_daemon::sqlite_store::SqliteStore;
-use echo_daemon::base64_encode;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -67,10 +67,8 @@ async fn market_auction_award_settles_at_locked_price() {
     // ── Identities ──────────────────────────────────────────────
     let consumer =
         NodeIdentity::load_or_generate(&dir.path().join("consumer.json"), "us-west").unwrap();
-    let solid =
-        NodeIdentity::load_or_generate(&dir.path().join("solid.json"), "us-west").unwrap();
-    let flaky =
-        NodeIdentity::load_or_generate(&dir.path().join("flaky.json"), "us-west").unwrap();
+    let solid = NodeIdentity::load_or_generate(&dir.path().join("solid.json"), "us-west").unwrap();
+    let flaky = NodeIdentity::load_or_generate(&dir.path().join("flaky.json"), "us-west").unwrap();
     let consumer_peer = consumer.peer_id_str().to_string();
     let solid_peer = solid.peer_id_str().to_string();
     let flaky_peer = flaky.peer_id_str().to_string();
@@ -123,9 +121,12 @@ async fn market_auction_award_settles_at_locked_price() {
     // The winning provider settles its own signed receipts at the locked
     // market price, not the flat SETTLEMENT_RATE_USD_PER_GB ($0.50).
     let store = Arc::new(
-        SqliteStore::new(&format!("sqlite:{}", dir.path().join("market.db").display()))
-            .await
-            .unwrap(),
+        SqliteStore::new(&format!(
+            "sqlite:{}",
+            dir.path().join("market.db").display()
+        ))
+        .await
+        .unwrap(),
     );
     let settlement = SettlementEngine::new(solid.clone(), store.clone(), 0.50);
 
@@ -177,7 +178,10 @@ async fn budget_cap_and_requester_guards_hold_end_to_end() {
     // Over-budget bids are rejected; the cap is absolute.
     assert_eq!(
         engine.submit_bid(&auction.id, provider.peer_id_str(), 0.60, 0.8, 30.0, 101),
-        Err(BidError::BudgetExceeded { price: 0.60, cap: 0.50 })
+        Err(BidError::BudgetExceeded {
+            price: 0.60,
+            cap: 0.50
+        })
     );
     // Exactly at the cap is fine.
     engine

@@ -10,8 +10,8 @@
 use echo_daemon::availability::AvailabilityEngine;
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
-use echo_daemon::sqlite_store::SqliteStore;
 use echo_daemon::security::SecurityCounters;
+use echo_daemon::sqlite_store::SqliteStore;
 use echo_daemon::tunnel::{RelayConfig, TunnelEvent, TunnelService};
 use echo_daemon::MetricsBackend;
 use std::sync::Arc;
@@ -25,9 +25,7 @@ const NOISE_MAX_MSG_LEN: usize = 65535;
 
 /// Find a free TCP port on loopback by binding with port 0, then releasing it.
 async fn free_port() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     port
@@ -35,9 +33,7 @@ async fn free_port() -> u16 {
 
 /// Spawn a TCP echo server on loopback; returns its address.
 async fn spawn_echo_server() -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         loop {
@@ -165,7 +161,12 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
     let mut session = None;
     for attempt in 0..5 {
         match consumer_svc
-            .connect_to_provider(&tunnel_addr, provider_peer_id, session_id, &expected_provider_noise_pubkey)
+            .connect_to_provider(
+                &tunnel_addr,
+                provider_peer_id,
+                session_id,
+                &expected_provider_noise_pubkey,
+            )
             .await
         {
             Ok(s) => {
@@ -195,7 +196,10 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
     let mut raw_buf = [0u8; NOISE_MAX_MSG_LEN];
     let mut plain_buf = [0u8; NOISE_MAX_MSG_LEN];
     let n = session.stream.read(&mut raw_buf).await.unwrap();
-    assert!(n > 0, "provider should relay the echo response through the tunnel");
+    assert!(
+        n > 0,
+        "provider should relay the echo response through the tunnel"
+    );
     let plain_len = session
         .transport
         .lock()
@@ -273,22 +277,21 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut final_receipt = None;
     while std::time::Instant::now() < deadline {
-        let receipt = match tokio::time::timeout(
-            Duration::from_millis(500),
-            receipt_rx.recv(),
-        )
-        .await
-        {
-            Ok(Some(r)) => r,
-            Ok(None) => panic!("receipt channel closed unexpectedly"),
-            Err(_) => break, // no more receipts in flight
-        };
+        let receipt =
+            match tokio::time::timeout(Duration::from_millis(500), receipt_rx.recv()).await {
+                Ok(Some(r)) => r,
+                Ok(None) => panic!("receipt channel closed unexpectedly"),
+                Err(_) => break, // no more receipts in flight
+            };
         assert_eq!(receipt.session_id, session_id);
         assert_eq!(receipt.signer_peer_id, provider.peer_id_str());
         let verified = receipt
             .verify_signature(provider.public_key_bytes.as_slice())
             .expect("signature verification should not error");
-        assert!(verified, "receipt signature must verify against the provider key");
+        assert!(
+            verified,
+            "receipt signature must verify against the provider key"
+        );
         if receipt.bytes_transferred >= total_bytes {
             final_receipt = Some(receipt);
             break;
@@ -312,10 +315,16 @@ async fn tunnel_handshake_relay_and_settlement_roundtrip() {
         "final receipt must settle toward payout the first time"
     );
     let replay = settlement.settle_receipt(final_receipt).await.unwrap();
-    assert!(replay.is_none(), "replaying a settled receipt must not double-count");
+    assert!(
+        replay.is_none(),
+        "replaying a settled receipt must not double-count"
+    );
 
     let summary = settlement.summary().await.unwrap();
-    assert!(summary.receipts_settled >= 1, "payout summary must include the settled receipt");
+    assert!(
+        summary.receipts_settled >= 1,
+        "payout summary must include the settled receipt"
+    );
     assert!(
         summary.total_bytes_settled >= total_bytes,
         "payout bytes must cover the full relayed transfer"
@@ -619,8 +628,12 @@ async fn session_ticket_issued_stored_and_resumed() {
     // ── First provider instance ───────────────────────────────────
     let port1 = free_port().await;
     let (listener1, tunnel_addr1) = Box::pin(spawn_provider_with_tickets(
-        port1, provider.clone(), backend.clone(), echo_addr.clone(),
-    )).await;
+        port1,
+        provider.clone(),
+        backend.clone(),
+        echo_addr.clone(),
+    ))
+    .await;
 
     // ── Build consumer service ────────────────────────────────────
     let consumer_avail = Arc::new(RwLock::new(AvailabilityEngine::new(0.0, 0.0, 4)));
@@ -650,7 +663,14 @@ async fn session_ticket_issued_stored_and_resumed() {
     let consumer_svc = Arc::new(consumer_svc);
 
     // ── First connection: full Noise_XX ───────────────────────────
-    let session1 = retry_connect(&consumer_svc, &tunnel_addr1, provider_peer_id, "ticket-sess-t1", &provider_noise_pubkey).await;
+    let session1 = retry_connect(
+        &consumer_svc,
+        &tunnel_addr1,
+        provider_peer_id,
+        "ticket-sess-t1",
+        &provider_noise_pubkey,
+    )
+    .await;
 
     // Quick relay to confirm the tunnel works.
     let mut s1 = session1;
@@ -659,9 +679,13 @@ async fn session_ticket_issued_stored_and_resumed() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Ticket must be persisted to disk by the consumer.
-    let ticket_path = std::path::Path::new("data/tickets")
-        .join(format!("{}.ticket", provider_peer_id));
-    assert!(ticket_path.exists(), "consumer must persist ticket to {}", ticket_path.display());
+    let ticket_path =
+        std::path::Path::new("data/tickets").join(format!("{}.ticket", provider_peer_id));
+    assert!(
+        ticket_path.exists(),
+        "consumer must persist ticket to {}",
+        ticket_path.display()
+    );
 
     // Ticket must be in the DB on the provider side.
     let stored = backend.get_session_ticket("ticket-sess-t1").await.unwrap();
@@ -673,11 +697,22 @@ async fn session_ticket_issued_stored_and_resumed() {
 
     let port2 = free_port().await;
     let (listener2, tunnel_addr2) = Box::pin(spawn_provider_with_tickets(
-        port2, provider.clone(), backend.clone(), echo_addr.clone(),
-    )).await;
+        port2,
+        provider.clone(),
+        backend.clone(),
+        echo_addr.clone(),
+    ))
+    .await;
 
     // ── Second connection: consumer sends stored ticket ───────────
-    let session2 = retry_connect(&consumer_svc, &tunnel_addr2, provider_peer_id, "ticket-sess-t1", &provider_noise_pubkey).await;
+    let session2 = retry_connect(
+        &consumer_svc,
+        &tunnel_addr2,
+        provider_peer_id,
+        "ticket-sess-t1",
+        &provider_noise_pubkey,
+    )
+    .await;
 
     let mut s2 = session2;
     do_echo_roundtrip(&mut s2, b"resumed-connection-test\n").await;
@@ -759,10 +794,16 @@ async fn retry_connect(
     noise_pubkey: &[u8],
 ) -> echo_daemon::tunnel::EncryptedTunnelSession {
     for attempt in 0..10 {
-        match svc.connect_to_provider(addr, peer_id, session_id, noise_pubkey).await {
+        match svc
+            .connect_to_provider(addr, peer_id, session_id, noise_pubkey)
+            .await
+        {
             Ok(s) => return s,
             Err(e) => {
-                assert!(attempt < 9, "connect_to_provider failed after 10 attempts: {e}");
+                assert!(
+                    attempt < 9,
+                    "connect_to_provider failed after 10 attempts: {e}"
+                );
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         }
@@ -771,9 +812,17 @@ async fn retry_connect(
 }
 
 /// Send payload through tunnel, read echo back, assert roundtrip.
-async fn do_echo_roundtrip(session: &mut echo_daemon::tunnel::EncryptedTunnelSession, payload: &[u8]) {
+async fn do_echo_roundtrip(
+    session: &mut echo_daemon::tunnel::EncryptedTunnelSession,
+    payload: &[u8],
+) {
     let mut enc = [0u8; NOISE_MAX_MSG_LEN];
-    let n = session.transport.lock().await.write_message(payload, &mut enc).unwrap();
+    let n = session
+        .transport
+        .lock()
+        .await
+        .write_message(payload, &mut enc)
+        .unwrap();
     session.stream.write_all(&enc[..n]).await.unwrap();
 
     let mut raw = [0u8; NOISE_MAX_MSG_LEN];
@@ -783,6 +832,11 @@ async fn do_echo_roundtrip(session: &mut echo_daemon::tunnel::EncryptedTunnelSes
         .expect("echo should return within 5s")
         .unwrap();
     assert!(rn > 0, "echo server must return data");
-    let pn = session.transport.lock().await.read_message(&raw[..rn], &mut plain).unwrap();
+    let pn = session
+        .transport
+        .lock()
+        .await
+        .read_message(&raw[..rn], &mut plain)
+        .unwrap();
     assert_eq!(&plain[..pn], payload, "echo roundtrip payload mismatch");
 }

@@ -85,7 +85,8 @@ pub fn soft_slash_score(
     } else {
         successful_sessions as f64 / total as f64
     };
-    let availability_factor = MIN_AVAILABILITY_FACTOR + (1.0 - MIN_AVAILABILITY_FACTOR) * availability;
+    let availability_factor =
+        MIN_AVAILABILITY_FACTOR + (1.0 - MIN_AVAILABILITY_FACTOR) * availability;
 
     let score = (decayed * violation_discount * availability_factor).clamp(0.0, 1.0);
     (score * 10_000.0).round() / 10_000.0
@@ -108,7 +109,10 @@ mod tests {
         let s2 = soft_slash_score(1.0, None, 30.0, 2, 0, 0);
         let s4 = soft_slash_score(1.0, None, 30.0, 4, 0, 0);
         assert!((s1 - 0.8).abs() < 1e-4, "1 violation ⇒ ~0.8, got {s1}");
-        assert!((s2 - 0.6667).abs() < 1e-3, "2 violations ⇒ ~0.6667, got {s2}");
+        assert!(
+            (s2 - 0.6667).abs() < 1e-3,
+            "2 violations ⇒ ~0.6667, got {s2}"
+        );
         assert!((s4 - 0.5).abs() < 1e-4, "4 violations ⇒ ~0.5, got {s4}");
         assert!(s4 < s2 && s2 < s1, "score must fall as violations rise");
     }
@@ -121,11 +125,17 @@ mod tests {
         let all_bad = soft_slash_score(1.0, None, 30.0, 0, 0, 10);
         let no_history = soft_slash_score(1.0, None, 30.0, 0, 0, 0);
         assert_eq!(all_good, 1.0);
-        assert!((all_bad - 0.5).abs() < 1e-4, "all-failure ⇒ 0.5, got {all_bad}");
+        assert!(
+            (all_bad - 0.5).abs() < 1e-4,
+            "all-failure ⇒ 0.5, got {all_bad}"
+        );
         assert_eq!(no_history, 1.0, "no history must stay neutral");
         // Mixed: 1/4 success → factor 0.5 + 0.5·0.25 = 0.625.
         let mixed = soft_slash_score(1.0, None, 30.0, 0, 1, 3);
-        assert!((mixed - 0.625).abs() < 1e-4, "1/4 success ⇒ 0.625, got {mixed}");
+        assert!(
+            (mixed - 0.625).abs() < 1e-4,
+            "1/4 success ⇒ 0.625, got {mixed}"
+        );
     }
 
     /// Trust decay composes with the other factors.
@@ -138,7 +148,10 @@ mod tests {
         assert!((idle - 0.5).abs() < 1e-4, "one half-life ⇒ 0.5, got {idle}");
         // Combined with a violation: 0.5 × 0.8 = 0.4.
         let combo = soft_slash_score(1.0, Some(30 * 86_400), 30.0, 1, 0, 0);
-        assert!((combo - 0.4).abs() < 1e-4, "decay × violation ⇒ 0.4, got {combo}");
+        assert!(
+            (combo - 0.4).abs() < 1e-4,
+            "decay × violation ⇒ 0.4, got {combo}"
+        );
     }
 
     /// The composite is always within `0..=1` and well-formed inputs never
@@ -153,7 +166,10 @@ mod tests {
             (0.7, 7, 3, 4),
         ] {
             let s = soft_slash_score(rep, Some(u64::MAX), 30.0, v, ok, bad);
-            assert!(s.is_finite() && (0.0..=1.0).contains(&s), "score {s} out of range");
+            assert!(
+                s.is_finite() && (0.0..=1.0).contains(&s),
+                "score {s} out of range"
+            );
         }
         assert_eq!(soft_slash_score(f64::NAN, None, 30.0, 0, 0, 0), 0.0);
     }

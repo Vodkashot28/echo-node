@@ -87,7 +87,9 @@ impl DiscoveryConfig {
                     }
                     match parse_bootstrap_peer(entry) {
                         Ok(peer) => peers.push(peer),
-                        Err(e) => warn!(peer = entry, error = %e, "skipping invalid bootstrap peer"),
+                        Err(e) => {
+                            warn!(peer = entry, error = %e, "skipping invalid bootstrap peer")
+                        }
                     }
                 }
                 peers
@@ -102,7 +104,12 @@ impl DiscoveryConfig {
             .unwrap_or_else(|| "echo".to_string());
 
         let local_only = std::env::var("DHT_LOCAL_ONLY")
-            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .unwrap_or(false);
 
         let relay_mode = match std::env::var("DHT_RELAY_MODE")
@@ -125,7 +132,9 @@ impl DiscoveryConfig {
                     }
                     match parse_bootstrap_peer(entry) {
                         Ok(peer) => peers.push(peer),
-                        Err(e) => warn!(relay_peer = entry, error = %e, "skipping invalid relay peer"),
+                        Err(e) => {
+                            warn!(relay_peer = entry, error = %e, "skipping invalid relay peer")
+                        }
                     }
                 }
                 peers
@@ -198,22 +207,40 @@ pub enum DiscoveryEvent {
     PeerFound(PeerId, Multiaddr),
     PeerDisconnected(PeerId),
     /// A value record was stored locally (and replication query started).
-    RecordPublished { key: String },
+    RecordPublished {
+        key: String,
+    },
     /// A value record was found — local or remote, exact key match.
-    RecordFound { key: String, value: Vec<u8> },
+    RecordFound {
+        key: String,
+        value: Vec<u8>,
+    },
     /// No record exists for this key (or the lookup failed/timed out).
-    RecordNotFound { key: String },
+    RecordNotFound {
+        key: String,
+    },
     /// Provider lookup result for `key` (may fire more than once per query;
     /// later batches are supersets as the lookup progresses).
-    ProvidersFound { key: String, providers: Vec<PeerId> },
+    ProvidersFound {
+        key: String,
+        providers: Vec<PeerId>,
+    },
     /// A relay reservation was successfully made.
-    ReservationAccepted { relay_peer_id: PeerId },
+    ReservationAccepted {
+        relay_peer_id: PeerId,
+    },
     /// Relay reservation failed.
-    ReservationFailed { relay_peer_id: PeerId },
+    ReservationFailed {
+        relay_peer_id: PeerId,
+    },
     /// NAT status detected (public, private, unknown).
-    NatStatus { is_public: bool },
+    NatStatus {
+        is_public: bool,
+    },
     /// External address confirmed (for public nodes).
-    ExternalAddress { address: Multiaddr },
+    ExternalAddress {
+        address: Multiaddr,
+    },
 }
 
 /// String form of a Kademlia record key (keys are plain UTF-8 byte strings).
@@ -243,11 +270,9 @@ impl DiscoveryService {
 
         // Namespace every protocol by network id so isolated deployments
         // (dev LAN, private testnets) never talk to the public network.
-        let kad_protocol = StreamProtocol::try_from_owned(format!(
-            "/{}/kad/1.0.0",
-            config.network_id
-        ))
-        .context("DHT_NETWORK_ID produces an invalid Kademlia protocol name")?;
+        let kad_protocol =
+            StreamProtocol::try_from_owned(format!("/{}/kad/1.0.0", config.network_id))
+                .context("DHT_NETWORK_ID produces an invalid Kademlia protocol name")?;
         let identify_protocol = format!("/{}/id/1.0.0", config.network_id);
 
         let mut swarm = SwarmBuilder::with_existing_identity(keypair.clone())
@@ -368,14 +393,10 @@ impl DiscoveryService {
                 ];
 
                 for (addr_str, peer_id_str) in default_bootstrap {
-                    if let (Ok(addr), Ok(peer_id)) = (
-                        addr_str.parse::<Multiaddr>(),
-                        peer_id_str.parse::<PeerId>(),
-                    ) {
-                        swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .add_address(&peer_id, addr);
+                    if let (Ok(addr), Ok(peer_id)) =
+                        (addr_str.parse::<Multiaddr>(), peer_id_str.parse::<PeerId>())
+                    {
+                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
                         debug!(peer_id = %peer_id, addr = %addr_str, "default bootstrap peer added");
                     }
                 }
@@ -601,7 +622,7 @@ impl DiscoveryService {
                     .with(Protocol::P2p(relay_peer_id))
                     .with(Protocol::P2pCircuit)
                     .with(Protocol::P2p(target_peer_id));
-                
+
                 if let Err(e) = self.swarm.dial(relay_addr.clone()) {
                     warn!(
                         error = ?e,
@@ -627,12 +648,10 @@ mod tests {
 
     #[test]
     fn parse_bootstrap_peer_strips_p2p_suffix() {
-        let entry = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
+        let entry =
+            "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
         let (peer, addr) = parse_bootstrap_peer(entry).unwrap();
-        assert_eq!(
-            addr.to_string(),
-            "/ip4/127.0.0.1/tcp/4001"
-        );
+        assert_eq!(addr.to_string(), "/ip4/127.0.0.1/tcp/4001");
         assert_eq!(
             peer.to_string(),
             "12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN"
@@ -653,7 +672,12 @@ mod tests {
 
     #[test]
     fn from_env_defaults_match_previous_behaviour() {
-        for key in ["DHT_LISTEN_ADDR", "DHT_BOOTSTRAP_PEERS", "DHT_NETWORK_ID", "DHT_LOCAL_ONLY"] {
+        for key in [
+            "DHT_LISTEN_ADDR",
+            "DHT_BOOTSTRAP_PEERS",
+            "DHT_NETWORK_ID",
+            "DHT_LOCAL_ONLY",
+        ] {
             std::env::remove_var(key);
         }
         let cfg = DiscoveryConfig::from_env();
@@ -670,7 +694,10 @@ mod tests {
         let good_peer =
             "/ip4/10.0.0.5/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
         std::env::set_var("DHT_LISTEN_ADDR", "/ip4/127.0.0.1/tcp/4123");
-        std::env::set_var("DHT_BOOTSTRAP_PEERS", format!("{good_peer}, /ip4/bad tcp/nope"));
+        std::env::set_var(
+            "DHT_BOOTSTRAP_PEERS",
+            format!("{good_peer}, /ip4/bad tcp/nope"),
+        );
         std::env::set_var("DHT_NETWORK_ID", "mytestnet");
         std::env::set_var("DHT_LOCAL_ONLY", "true");
         let cfg = DiscoveryConfig::from_env();
@@ -685,7 +712,12 @@ mod tests {
         let cfg = DiscoveryConfig::from_env();
         assert_eq!(cfg.listen_addr.to_string(), "/ip4/0.0.0.0/tcp/0");
 
-        for key in ["DHT_LISTEN_ADDR", "DHT_BOOTSTRAP_PEERS", "DHT_NETWORK_ID", "DHT_LOCAL_ONLY"] {
+        for key in [
+            "DHT_LISTEN_ADDR",
+            "DHT_BOOTSTRAP_PEERS",
+            "DHT_NETWORK_ID",
+            "DHT_LOCAL_ONLY",
+        ] {
             std::env::remove_var(key);
         }
     }

@@ -88,9 +88,7 @@ impl DashboardConfig {
         let url = std::env::var("DASHBOARD_TELEMETRY_URL")
             .ok()
             .filter(|v| !v.is_empty());
-        let api_key = std::env::var("ECHO_API_KEY")
-            .ok()
-            .filter(|v| !v.is_empty());
+        let api_key = std::env::var("ECHO_API_KEY").ok().filter(|v| !v.is_empty());
         match (url, api_key) {
             (Some(url), Some(api_key)) => {
                 let spool_path = std::env::var("DASHBOARD_TELEMETRY_SPOOL")
@@ -262,11 +260,7 @@ fn series_stddev(series: &[FeatureInputs], f: impl Fn(&FeatureInputs) -> f64) ->
     }
     let n = series.len() as f64;
     let mean = series_mean(series, &f);
-    let var = series
-        .iter()
-        .map(|s| (f(s) - mean).powi(2))
-        .sum::<f64>()
-        / n;
+    let var = series.iter().map(|s| (f(s) - mean).powi(2)).sum::<f64>() / n;
     norm(var.sqrt() * 3.0)
 }
 
@@ -348,7 +342,9 @@ pub fn build_feature_vector(series: &[FeatureInputs]) -> Vec<f64> {
         v[23] = (ce - pe).max(0.0);
     }
     // Dim 25..28: volatility — stddev over the window.
-    v[24] = series_stddev(series, |s| norm((s.bandwidth_up_mbps + s.bandwidth_down_mbps) / 1600.0));
+    v[24] = series_stddev(series, |s| {
+        norm((s.bandwidth_up_mbps + s.bandwidth_down_mbps) / 1600.0)
+    });
     v[25] = series_stddev(series, |s| norm(s.latency_ms / 200.0));
     v[26] = series_stddev(series, |s| norm(s.packet_loss_pct / 5.0));
     v[27] = series_stddev(series, |s| norm(s.earnings_usd / 200.0));
@@ -555,7 +551,13 @@ impl DashboardReporter {
                     let Some(head) = queue.front().cloned() else {
                         break;
                     };
-                    match post_payload(&client, &task_config.url, &task_config.api_key, &head.payload).await
+                    match post_payload(
+                        &client,
+                        &task_config.url,
+                        &task_config.api_key,
+                        &head.payload,
+                    )
+                    .await
                     {
                         Ok(()) => {
                             queue.pop_front();
@@ -577,7 +579,8 @@ impl DashboardReporter {
                                 retry_in_ms = delay_ms,
                                 "dashboard push failed; frame kept for retry"
                             );
-                            retry_at = Some(tokio::time::Instant::now() + Duration::from_millis(delay_ms));
+                            retry_at =
+                                Some(tokio::time::Instant::now() + Duration::from_millis(delay_ms));
                             break;
                         }
                     }
@@ -588,10 +591,7 @@ impl DashboardReporter {
                 }
             }
         });
-        Self {
-            tx,
-            shutdown_tx,
-        }
+        Self { tx, shutdown_tx }
     }
 
     /// Queue a frame without blocking the heartbeat. Frames are dropped on
@@ -624,8 +624,6 @@ impl DashboardReporter {
             }
         }
     }
-
-
 }
 
 /// Final delivery attempt on shutdown: keep posting until the queue is
@@ -635,8 +633,7 @@ async fn flush_remaining(
     config: &DashboardConfig,
     queue: &mut VecDeque<SpoolRecord>,
 ) {
-    let deadline =
-        tokio::time::Instant::now() + Duration::from_secs(SHUTDOWN_FLUSH_SECS);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(SHUTDOWN_FLUSH_SECS);
     while let Some(head) = queue.front() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
@@ -853,7 +850,11 @@ mod tests {
         assert_eq!(backoff_delay_ms(500, 30_000, 2, 0.0), 1_000);
         assert_eq!(backoff_delay_ms(500, 30_000, 3, 0.0), 2_000);
         assert_eq!(backoff_delay_ms(500, 30_000, 7, 0.0), 30_000);
-        assert_eq!(backoff_delay_ms(500, 30_000, 100, 0.0), 30_000, "caps at max");
+        assert_eq!(
+            backoff_delay_ms(500, 30_000, 100, 0.0),
+            30_000,
+            "caps at max"
+        );
     }
 
     #[test]
@@ -916,14 +917,7 @@ mod tests {
             avg_latency_ms: 1.0,
             exit_reason: "completed".to_string(),
         };
-        let event = SessionEvent::from_close(
-            "12D3KooWprovider",
-            "tun_1",
-            10,
-            20,
-            0.5,
-            &details,
-        );
+        let event = SessionEvent::from_close("12D3KooWprovider", "tun_1", 10, 20, 0.5, &details);
         let record = SpoolRecord::from(ReporterMessage::Session(Box::new(event)));
         assert_eq!(record.kind, "session");
         assert_eq!(record.payload["session_id"], "tun_1");
@@ -976,10 +970,7 @@ mod tests {
     #[test]
     fn config_from_env_reads_durability_knobs() {
         // Consolidated (env is process-global; tests run in parallel).
-        for key in [
-            "DASHBOARD_TELEMETRY_URL",
-            "ECHO_API_KEY",
-        ] {
+        for key in ["DASHBOARD_TELEMETRY_URL", "ECHO_API_KEY"] {
             std::env::remove_var(key);
         }
         std::env::remove_var("DASHBOARD_TELEMETRY_SPOOL");
@@ -1012,10 +1003,7 @@ mod tests {
         assert_eq!(cfg.backoff_max_ms, 30_000);
         assert_eq!(cfg.max_queue, 256);
 
-        for key in [
-            "DASHBOARD_TELEMETRY_URL",
-            "ECHO_API_KEY",
-        ] {
+        for key in ["DASHBOARD_TELEMETRY_URL", "ECHO_API_KEY"] {
             std::env::remove_var(key);
         }
     }

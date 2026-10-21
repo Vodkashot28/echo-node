@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info};
 
+use crate::base64_encode;
 use crate::identity::NodeIdentity;
 use crate::models::StateReceipt;
-use crate::base64_encode;
 
 // ──────────────────────────────────────────────────────────────
 // Token Bucket Rate Limiter
@@ -107,9 +107,7 @@ pub struct MeteringEngine {
 }
 
 impl MeteringEngine {
-    pub fn new(
-        identity: NodeIdentity,
-    ) -> (Self, mpsc::UnboundedReceiver<StateReceipt>) {
+    pub fn new(identity: NodeIdentity) -> (Self, mpsc::UnboundedReceiver<StateReceipt>) {
         Self::with_config(identity, 100, 1_000_000)
     }
 
@@ -147,7 +145,11 @@ impl MeteringEngine {
             .write()
             .await
             .insert(session_id.to_string(), session);
-        info!(session = session_id, remote = remote_peer_id, "metered session started");
+        info!(
+            session = session_id,
+            remote = remote_peer_id,
+            "metered session started"
+        );
     }
 
     /// Record bytes transferred and potentially issue a receipt
@@ -158,9 +160,7 @@ impl MeteringEngine {
         bytes: u64,
     ) -> Result<()> {
         let mut sessions = self.sessions.write().await;
-        let session = sessions
-            .get_mut(session_id)
-            .context("session not found")?;
+        let session = sessions.get_mut(session_id).context("session not found")?;
 
         match direction {
             "egress" => session.bytes_sent += bytes,
@@ -228,9 +228,7 @@ impl MeteringEngine {
     /// Finalize a session and issue final receipt
     pub async fn end_session(&self, session_id: &str) -> Result<StateReceipt> {
         let mut sessions = self.sessions.write().await;
-        let session = sessions
-            .remove(session_id)
-            .context("session not found")?;
+        let session = sessions.remove(session_id).context("session not found")?;
 
         let receipt = self.create_receipt(&session).await?;
         let _ = self.receipt_tx.send(receipt.clone());
@@ -245,7 +243,6 @@ impl MeteringEngine {
 
         Ok(receipt)
     }
-
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -327,7 +324,7 @@ mod tests {
         let encoded = base64_encode(&input);
         // 64 bytes = 85 chars base64 (64/3 * 4 rounded up)
         assert_eq!(encoded.len(), 88); // 64/3 = 21.33 -> 22 groups * 4 = 88
-        // All chars should be valid base64
+                                       // All chars should be valid base64
         for c in encoded.chars() {
             assert!(
                 c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=',
@@ -339,7 +336,7 @@ mod tests {
 
     #[test]
     fn receipt_sign_and_verify_roundtrip() {
-        use ed25519_dalek::{SigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey};
         use rand::rngs::OsRng;
 
         // Generate a real keypair
@@ -373,7 +370,10 @@ mod tests {
         let other_key = SigningKey::generate(&mut OsRng).verifying_key();
         let result = receipt.verify_signature(&other_key.to_bytes());
         assert!(result.is_ok());
-        assert!(!result.unwrap(), "verification should have failed with wrong key");
+        assert!(
+            !result.unwrap(),
+            "verification should have failed with wrong key"
+        );
     }
 
     // ── Backpressure sleep math (relay hot path) ──────────────
@@ -473,7 +473,10 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         // Single chunk over the byte threshold triggers immediately.
-        engine.record_transfer("s1", "ingress", 1_001).await.unwrap();
+        engine
+            .record_transfer("s1", "ingress", 1_001)
+            .await
+            .unwrap();
         let receipt = rx.try_recv().expect("large chunk must issue a receipt");
         assert_eq!(receipt.bytes_transferred, 1_501);
         assert_eq!(receipt.sequence_number, 2);

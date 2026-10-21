@@ -68,9 +68,7 @@ pub async fn run_consumer_listener(
         );
 
         tokio::spawn(async move {
-            if let Err(e) =
-                run_consumer_session(&service, &config, app_stream, &session_id).await
-            {
+            if let Err(e) = run_consumer_session(&service, &config, app_stream, &session_id).await {
                 error!(session = %session_id, error = %e, "consumer session failed");
             }
         });
@@ -96,7 +94,10 @@ async fn run_consumer_session(
         .await
         .context("consumer tunnel handshake failed")?;
 
-    info!(session = session_id, "consumer tunnel established, relaying");
+    info!(
+        session = session_id,
+        "consumer tunnel established, relaying"
+    );
 
     // Relay without metering; teardown releases the availability slot.
     let (bytes_sent, bytes_received) = service
@@ -106,9 +107,7 @@ async fn run_consumer_session(
 
     info!(
         session = session_id,
-        bytes_sent,
-        bytes_received,
-        "consumer session complete"
+        bytes_sent, bytes_received, "consumer session complete"
     );
     Ok(())
 }

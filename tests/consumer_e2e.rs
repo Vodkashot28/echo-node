@@ -15,8 +15,8 @@ use echo_daemon::availability::AvailabilityEngine;
 use echo_daemon::consumer::{run_consumer_listener, ConsumerConfig};
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::meter::MeteringEngine;
-use echo_daemon::sqlite_store::SqliteStore;
 use echo_daemon::security::SecurityCounters;
+use echo_daemon::sqlite_store::SqliteStore;
 use echo_daemon::tunnel::{RelayConfig, TunnelService};
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,9 +26,7 @@ use tokio::sync::RwLock;
 
 /// Find a free TCP port on loopback by binding with port 0, then releasing it.
 async fn free_port() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     port
@@ -36,9 +34,7 @@ async fn free_port() -> u16 {
 
 /// Spawn a TCP echo server on loopback; returns its address.
 async fn spawn_echo_server() -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         loop {
@@ -230,14 +226,21 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert!(slot_held, "consumer should hold one availability slot during the relay");
+    assert!(
+        slot_held,
+        "consumer should hold one availability slot during the relay"
+    );
 
     let payload = b"consumer-mode-echo-roundtrip-payload\n";
     app_stream.write_all(payload).await.unwrap();
 
     // Read the echo response through the full tunnel path.
     let response = read_until(&mut app_stream, payload.len()).await;
-    assert_eq!(&response[..], &payload[..], "relayed echo must match the original payload");
+    assert_eq!(
+        &response[..],
+        &payload[..],
+        "relayed echo must match the original payload"
+    );
 
     // Disconnect the local app → relay ends → teardown runs.
     drop(app_stream);
@@ -285,12 +288,12 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut final_receipt = None;
     while std::time::Instant::now() < deadline {
-        let receipt = match tokio::time::timeout(Duration::from_millis(500), receipt_rx.recv()).await
-        {
-            Ok(Some(r)) => r,
-            Ok(None) => panic!("receipt channel closed unexpectedly"),
-            Err(_) => break,
-        };
+        let receipt =
+            match tokio::time::timeout(Duration::from_millis(500), receipt_rx.recv()).await {
+                Ok(Some(r)) => r,
+                Ok(None) => panic!("receipt channel closed unexpectedly"),
+                Err(_) => break,
+            };
         assert!(
             receipt.session_id.starts_with("consumer-"),
             "provider should see the consumer-generated session id, got {}",
@@ -308,8 +311,8 @@ async fn consumer_listener_relays_local_app_through_provider_tunnel() {
             break;
         }
     }
-    let final_receipt =
-        final_receipt.expect("a final provider receipt covering the full transfer should be issued");
+    let final_receipt = final_receipt
+        .expect("a final provider receipt covering the full transfer should be issued");
     assert_eq!(final_receipt.bytes_transferred, (row.0 + row.1) as u64);
 
     // ── Consumer side effects ─────────────────────────────────────

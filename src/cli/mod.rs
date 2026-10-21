@@ -201,7 +201,11 @@ mod tests {
         let cli = Cli::try_parse_from(["echo-node", "onboard", "--offline", "--reset"])
             .expect("onboard flags");
         match cli.command {
-            Some(Commands::Onboard { offline, reset, status }) => {
+            Some(Commands::Onboard {
+                offline,
+                reset,
+                status,
+            }) => {
                 assert!(offline);
                 assert!(reset);
                 assert!(!status);

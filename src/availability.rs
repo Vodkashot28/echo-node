@@ -62,11 +62,7 @@ fn ewma_step(prev: Option<f64>, raw: f64, alpha: f64) -> f64 {
 }
 
 impl AvailabilityEngine {
-    pub fn new(
-        max_upload_mbps: f64,
-        max_download_mbps: f64,
-        max_sessions: u32,
-    ) -> Self {
+    pub fn new(max_upload_mbps: f64, max_download_mbps: f64, max_sessions: u32) -> Self {
         let mut system = System::new_with_specifics(
             RefreshKind::new()
                 .with_cpu(CpuRefreshKind::everything())
@@ -159,8 +155,7 @@ impl AvailabilityEngine {
             let last = self.rx_samples.back().unwrap();
             let dt = last.1.duration_since(first.1).as_secs_f64();
             if dt > 0.0 {
-                self.current_usage_rx_bps =
-                    ((last.0.saturating_sub(first.0)) as f64 / dt) * 8.0;
+                self.current_usage_rx_bps = ((last.0.saturating_sub(first.0)) as f64 / dt) * 8.0;
                 self.current_usage_tx_bps = {
                     let t_first = &self.tx_samples[0];
                     let t_last = self.tx_samples.back().unwrap();
@@ -207,7 +202,11 @@ impl AvailabilityEngine {
             return Err("max session limit reached");
         }
         self.active_sessions += 1;
-        info!(active = self.active_sessions, max = self.max_sessions, "session acquired");
+        info!(
+            active = self.active_sessions,
+            max = self.max_sessions,
+            "session acquired"
+        );
         Ok(())
     }
 
@@ -215,7 +214,11 @@ impl AvailabilityEngine {
     pub fn release_session(&mut self) {
         if self.active_sessions > 0 {
             self.active_sessions -= 1;
-            info!(active = self.active_sessions, max = self.max_sessions, "session released");
+            info!(
+                active = self.active_sessions,
+                max = self.max_sessions,
+                "session released"
+            );
         }
     }
 
@@ -354,7 +357,11 @@ mod tests {
             .try_acquire_session()
             .expect_err("4th session must be rejected at max_sessions=3");
         assert!(err.contains("max session limit"));
-        assert_eq!(engine.active_sessions(), 3, "failed acquire must not leak a slot");
+        assert_eq!(
+            engine.active_sessions(),
+            3,
+            "failed acquire must not leak a slot"
+        );
     }
 
     #[test]
@@ -404,7 +411,10 @@ mod tests {
         let mut engine = AvailabilityEngine::new(HUGE_MBPS, HUGE_MBPS, 10);
         let (_, up, down) = engine.refresh_and_compute();
         assert!(up > 0.0, "expected positive upload capacity, got {up}");
-        assert!(down > 0.0, "expected positive download capacity, got {down}");
+        assert!(
+            down > 0.0,
+            "expected positive download capacity, got {down}"
+        );
     }
 
     #[test]
@@ -491,7 +501,10 @@ mod tests {
         for _ in 0..64 {
             est = Some(ewma_step(est, 100.0, 0.3));
         }
-        assert!((est.unwrap() - 100.0).abs() < 0.5, "should converge, got {est:?}");
+        assert!(
+            (est.unwrap() - 100.0).abs() < 0.5,
+            "should converge, got {est:?}"
+        );
     }
 
     #[test]

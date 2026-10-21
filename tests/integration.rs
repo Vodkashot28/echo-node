@@ -5,9 +5,7 @@
 
 use echo_daemon::identity::NodeIdentity;
 use echo_daemon::migrator::{run_sqlite, Migration};
-use echo_daemon::models::{
-    CapabilityDescriptor, PeerReputation, SettlementRecord, StateReceipt,
-};
+use echo_daemon::models::{CapabilityDescriptor, PeerReputation, SettlementRecord, StateReceipt};
 use echo_daemon::sqlite_store::SqliteStore;
 use echo_daemon::{base64_encode, MetricsBackend};
 use std::path::PathBuf;
@@ -36,7 +34,11 @@ async fn sqlite_backend_initialization_and_migration() {
         .fetch_one(store.pool())
         .await
         .unwrap();
-    assert!(count.0 >= 4, "expected at least 4 migrations, got {}", count.0);
+    assert!(
+        count.0 >= 4,
+        "expected at least 4 migrations, got {}",
+        count.0
+    );
 
     // Verify all expected tables exist
     let tables: Vec<(String,)> = sqlx::query_as(
@@ -92,23 +94,24 @@ async fn sqlite_failed_migration_not_recorded_and_retried() {
     });
 
     let err = run_sqlite(&pool, &migrations).await;
-    assert!(err.is_err(), "a genuine migration failure must abort the run");
+    assert!(
+        err.is_err(),
+        "a genuine migration failure must abort the run"
+    );
 
     // The failed migration must NOT be recorded as applied...
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM schema_migrations WHERE version = 99")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM schema_migrations WHERE version = 99")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(count.0, 0, "failed migration must not be marked applied");
 
     // ...and the statements that ran before the failure must be rolled back.
-    let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='nope_broken'",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let tables: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name='nope_broken'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert!(
         tables.is_empty(),
         "failed migration must be rolled back atomically"
@@ -123,12 +126,11 @@ async fn sqlite_failed_migration_not_recorded_and_retried() {
     });
     run_sqlite(&pool, &fixed).await.unwrap();
 
-    let tables2: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='nope_fixed'",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let tables2: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name='nope_fixed'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(tables2.len(), 1, "retried migration should apply");
 }
 
@@ -226,7 +228,10 @@ async fn sqlite_capability_upsert_and_query() {
         .await
         .unwrap();
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].peer_id, "peer-1", "reputation must rank above bandwidth");
+    assert_eq!(
+        results[0].peer_id, "peer-1",
+        "reputation must rank above bandwidth"
+    );
     assert_eq!(results[1].peer_id, "peer-2");
     assert_eq!(results[0].upload_cap_mbps, 100.0);
     assert_eq!(results[0].noise_public_key, vec![10, 20, 30]);
@@ -329,7 +334,11 @@ async fn sqlite_settlement_record_idempotent_and_summary() {
     store.record_settlement(&r1).await.unwrap();
 
     let settlements = store.get_settlements(100).await.unwrap();
-    assert_eq!(settlements.len(), 2, "replayed receipt must not double-count");
+    assert_eq!(
+        settlements.len(),
+        2,
+        "replayed receipt must not double-count"
+    );
 
     let summary = store.settlement_summary().await.unwrap();
     assert_eq!(summary.receipts_settled, 2);
@@ -348,7 +357,8 @@ async fn settlement_engine_accumulates_verified_receipts() {
     let dir = TempDir::new().unwrap();
     let db_path = format!("sqlite:{}", dir.path().join("test.db").display());
     let store = Arc::new(SqliteStore::new(&db_path).await.unwrap());
-    let identity = NodeIdentity::load_or_generate(&temp_identity_path(dir.path()), "us-west").unwrap();
+    let identity =
+        NodeIdentity::load_or_generate(&temp_identity_path(dir.path()), "us-west").unwrap();
 
     let engine = SettlementEngine::new(identity.clone(), store.clone(), 0.50);
 
@@ -362,7 +372,10 @@ async fn settlement_engine_accumulates_verified_receipts() {
 
     // Replaying the same receipt is idempotent.
     let replayed = engine.settle_receipt(receipt).await.unwrap();
-    assert!(replayed.is_none(), "already-settled receipt must not settle twice");
+    assert!(
+        replayed.is_none(),
+        "already-settled receipt must not settle twice"
+    );
 
     let summary = engine.summary().await.unwrap();
     assert_eq!(summary.receipts_settled, 1);
@@ -376,15 +389,18 @@ async fn settlement_engine_rejects_foreign_or_tampered_receipts() {
     let dir = TempDir::new().unwrap();
     let db_path = format!("sqlite:{}", dir.path().join("test.db").display());
     let store = Arc::new(SqliteStore::new(&db_path).await.unwrap());
-    let identity = NodeIdentity::load_or_generate(&temp_identity_path(dir.path()), "us-west").unwrap();
+    let identity =
+        NodeIdentity::load_or_generate(&temp_identity_path(dir.path()), "us-west").unwrap();
 
     let engine = SettlementEngine::new(identity.clone(), store.clone(), 0.50);
 
     // Signed by someone else entirely → rejected on signature check.
-    let foreign =
-        NodeIdentity::load_or_generate(&dir.path().join("foreign.json"), "eu").unwrap();
+    let foreign = NodeIdentity::load_or_generate(&dir.path().join("foreign.json"), "eu").unwrap();
     let foreign_receipt = signed_receipt(&foreign, "receipt-foreign", 1_000);
-    let result = engine.settle_receipt(foreign_receipt.clone()).await.unwrap();
+    let result = engine
+        .settle_receipt(foreign_receipt.clone())
+        .await
+        .unwrap();
     assert!(result.is_none(), "foreign receipt must not settle");
 
     // Our own receipt, but tampered with after signing → rejected.
@@ -581,15 +597,12 @@ async fn sqlite_cleanup_old_metrics() {
     let store = SqliteStore::new(&db_path).await.unwrap();
 
     // Insert a metric with a timestamp 60 days ago
-    let old_ts = (chrono::Utc::now() - chrono::Duration::days(60))
-        .to_rfc3339();
-    sqlx::query(
-        "INSERT INTO node_metrics (node_id, user_id, recorded_at) VALUES ('n1', 'u1', ?)",
-    )
-    .bind(&old_ts)
-    .execute(store.pool())
-    .await
-    .unwrap();
+    let old_ts = (chrono::Utc::now() - chrono::Duration::days(60)).to_rfc3339();
+    sqlx::query("INSERT INTO node_metrics (node_id, user_id, recorded_at) VALUES ('n1', 'u1', ?)")
+        .bind(&old_ts)
+        .execute(store.pool())
+        .await
+        .unwrap();
 
     // Insert a recent metric
     let store2 = SqliteStore::new(&db_path).await.unwrap();
@@ -630,8 +643,7 @@ async fn ledger_writer_persists_hash_chained_events_and_resumes() {
     let dir = TempDir::new().unwrap();
     let db_path = format!("sqlite:{}", dir.path().join("ledger.db").display());
     let store = Arc::new(SqliteStore::new(&db_path).await.unwrap());
-    let identity =
-        NodeIdentity::load_or_generate(&temp_identity_path(dir.path()), "test").unwrap();
+    let identity = NodeIdentity::load_or_generate(&temp_identity_path(dir.path()), "test").unwrap();
     let node_id = format!("peer:{}", identity.peer_id_str());
     let network = "echomesh-testnet";
 
@@ -698,7 +710,11 @@ async fn ledger_writer_persists_hash_chained_events_and_resumes() {
     let mut genesis: Option<String> = None;
     for (i, (seq, json, hash, prev_hash)) in rows.iter().enumerate() {
         let ev: LedgerEvent = serde_json::from_str(json).expect("event_json parses");
-        assert_eq!(*seq as u64, (i + 1) as u64, "sequence starts at 1, increments");
+        assert_eq!(
+            *seq as u64,
+            (i + 1) as u64,
+            "sequence starts at 1, increments"
+        );
         assert_eq!(ev.sequence, (i + 1) as u64);
         assert_eq!(ev.network, network);
         assert_eq!(ev.hash, *hash, "stored hash matches recomputed-hash source");
@@ -707,7 +723,10 @@ async fn ledger_writer_persists_hash_chained_events_and_resumes() {
         if i == 0 {
             genesis = Some(hash.clone());
             assert!(prev_hash.is_none(), "genesis has no prev_hash");
-            assert!(ev.provenance.root_hash.is_none(), "genesis has no root_hash");
+            assert!(
+                ev.provenance.root_hash.is_none(),
+                "genesis has no root_hash"
+            );
         } else {
             assert_eq!(
                 prev_hash.as_deref(),
@@ -722,7 +741,11 @@ async fn ledger_writer_persists_hash_chained_events_and_resumes() {
         }
         prev = Some(hash.clone());
     }
-    assert_eq!(chain.last_hash, prev.expect("3 hashes"), "chain state last_hash");
+    assert_eq!(
+        chain.last_hash,
+        prev.expect("3 hashes"),
+        "chain state last_hash"
+    );
     assert_eq!(
         chain.genesis_hash,
         genesis.expect("genesis"),
@@ -763,7 +786,11 @@ async fn ledger_writer_persists_hash_chained_events_and_resumes() {
     .fetch_one(store.pool())
     .await
     .unwrap();
-    assert_eq!(row4.1.as_deref(), Some(chain.last_hash.as_str()), "event 4 links to event 3");
+    assert_eq!(
+        row4.1.as_deref(),
+        Some(chain.last_hash.as_str()),
+        "event 4 links to event 3"
+    );
     let ev4: LedgerEvent = serde_json::from_str(&row4.2).expect("event 4 parses");
     assert!(verify_event(&ev4).expect("verify"), "event 4 verifies");
     assert_eq!(

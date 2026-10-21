@@ -14,11 +14,11 @@
 //! runtime").
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::time::Duration;
 
-use super::config::{EchoHome, NodeConfig, daemon_addr};
+use super::config::{daemon_addr, EchoHome, NodeConfig};
 
 /// Seconds to wait for the daemon to become reachable after spawning.
 pub const STARTUP_TIMEOUT_SECS: u64 = 15;
@@ -211,7 +211,10 @@ fn signal_term(pid: u32) -> Result<()> {
     // daemon's graceful-shutdown path, never an unkillable state.
     let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     if rc != 0 {
-        bail!("failed to signal pid {pid}: {}", std::io::Error::last_os_error());
+        bail!(
+            "failed to signal pid {pid}: {}",
+            std::io::Error::last_os_error()
+        );
     }
     Ok(())
 }

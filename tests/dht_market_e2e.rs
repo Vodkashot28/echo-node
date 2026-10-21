@@ -16,12 +16,10 @@
 //! ack event — the provider lookup's own retries cover it.
 
 use echo_daemon::bidding::{
-    award_key, auction_key, decode_auction_index, encode_auction_index, host_index_key,
+    auction_key, award_key, decode_auction_index, encode_auction_index, host_index_key,
     region_providers_key, AuctionBook, AuctionRecord, Award, BidConfig, BidEngine, CreateAuction,
 };
-use echo_daemon::discovery::{
-    DiscoveryCommand, DiscoveryConfig, DiscoveryEvent, DiscoveryService,
-};
+use echo_daemon::discovery::{DiscoveryCommand, DiscoveryConfig, DiscoveryEvent, DiscoveryService};
 use echo_daemon::identity::NodeIdentity;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -97,9 +95,7 @@ async fn swarm_pair(tag: &str) -> Pair {
     let (mut svc_b, b_cmd, b_rx) = DiscoveryService::new(
         &id_b,
         &DiscoveryConfig {
-            listen_addr: "/ip4/127.0.0.1/tcp/0"
-                .parse()
-                .expect("listen addr B"),
+            listen_addr: "/ip4/127.0.0.1/tcp/0".parse().expect("listen addr B"),
             bootstrap: vec![(peer_a, listen_a)],
             network_id: net,
             local_only: false,
@@ -247,7 +243,8 @@ async fn auction_record_propagates_between_two_swarms() {
         },
         move |ev| match ev {
             DiscoveryEvent::ProvidersFound { key, providers }
-                if key == region_key_for_pred && providers.iter().any(|p| p.to_string() == a_peer) =>
+                if key == region_key_for_pred
+                    && providers.iter().any(|p| p.to_string() == a_peer) =>
             {
                 Some(())
             }
@@ -355,9 +352,7 @@ async fn award_record_reaches_the_winning_provider() {
     let got: Award = expect_event(
         &pair.b_cmd,
         &mut pair.b_rx,
-        move || DiscoveryCommand::GetRecord {
-            key: key_b.clone(),
-        },
+        move || DiscoveryCommand::GetRecord { key: key_b.clone() },
         move |ev| match ev {
             DiscoveryEvent::RecordFound { key, value } if key == pred_key => {
                 serde_json::from_slice::<Award>(&value).ok()

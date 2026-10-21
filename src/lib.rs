@@ -76,9 +76,21 @@ pub fn base64_decode(input: &str) -> Vec<u8> {
     let mut output = Vec::with_capacity(input.len() * 3 / 4);
     for chunk in input.chunks(4) {
         let b0 = TABLE[chunk[0] as usize] as u32;
-        let b1 = if chunk.len() > 1 { TABLE[chunk[1] as usize] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { TABLE[chunk[2] as usize] as u32 } else { 0 };
-        let b3 = if chunk.len() > 3 { TABLE[chunk[3] as usize] as u32 } else { 0 };
+        let b1 = if chunk.len() > 1 {
+            TABLE[chunk[1] as usize] as u32
+        } else {
+            0
+        };
+        let b2 = if chunk.len() > 2 {
+            TABLE[chunk[2] as usize] as u32
+        } else {
+            0
+        };
+        let b3 = if chunk.len() > 3 {
+            TABLE[chunk[3] as usize] as u32
+        } else {
+            0
+        };
 
         let triple = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
         output.push(((triple >> 16) & 0xFF) as u8);

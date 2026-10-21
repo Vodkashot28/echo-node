@@ -302,11 +302,7 @@ impl SecurityCounters {
     }
 
     pub fn inc_settlement_anomaly(&self, detail: &str) {
-        self.record(
-            &self.settlement_anomalies,
-            "settlement_anomaly",
-            detail,
-        );
+        self.record(&self.settlement_anomalies, "settlement_anomaly", detail);
     }
 
     /// Snapshot all counters. Cheap (seven relaxed loads) — safe to call on
@@ -528,7 +524,11 @@ mod tests {
     #[test]
     fn peer_violations_track_and_count() {
         let s = SecurityCounters::default();
-        assert_eq!(s.peer_violation_count("peer-a"), 0, "clean peer starts at 0");
+        assert_eq!(
+            s.peer_violation_count("peer-a"),
+            0,
+            "clean peer starts at 0"
+        );
         s.note_peer_violation("peer-a");
         s.note_peer_violation("peer-a");
         s.note_peer_violation("peer-b");
@@ -573,8 +573,16 @@ mod tests {
         // At capacity: tracked peers keep counting, unknown ids are dropped.
         s.note_peer_violation("peer-0");
         s.note_peer_violation("peer-new");
-        assert_eq!(s.peer_violation_count("peer-0"), 2, "existing entry keeps counting");
-        assert_eq!(s.peer_violation_count("peer-new"), 0, "unknown id dropped at cap");
+        assert_eq!(
+            s.peer_violation_count("peer-0"),
+            2,
+            "existing entry keeps counting"
+        );
+        assert_eq!(
+            s.peer_violation_count("peer-new"),
+            0,
+            "unknown id dropped at cap"
+        );
         assert_eq!(
             s.top_peer_violations(usize::MAX).len(),
             MAX_TRACKED_PEERS,

@@ -8,7 +8,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-use super::config::{EchoHome, daemon_addr};
+use super::config::{daemon_addr, EchoHome};
 use super::daemon::{get_json, ping_daemon, process_alive, read_pid_file, reputation_from_quality};
 
 // ── REST response shapes (subset we actually display) ──────────────────────
@@ -82,10 +82,7 @@ pub async fn cmd_status(home: &EchoHome) -> Result<()> {
             "paused (stopped via /control — heartbeat halted)"
         },
     );
-    row(
-        "node id",
-        status.node_id.as_deref().unwrap_or("unknown"),
-    );
+    row("node id", status.node_id.as_deref().unwrap_or("unknown"));
     row(
         "peer id",
         metrics
@@ -94,10 +91,7 @@ pub async fn cmd_status(home: &EchoHome) -> Result<()> {
             .as_deref()
             .unwrap_or("unknown"),
     );
-    row(
-        "region",
-        metrics.region.as_deref().unwrap_or("unknown"),
-    );
+    row("region", metrics.region.as_deref().unwrap_or("unknown"));
     row("uptime", format_u64_secs(status.uptime_secs.unwrap_or(0)));
     row("heartbeats", status.heartbeat_count.unwrap_or(0));
     row(
@@ -117,14 +111,14 @@ pub async fn cmd_status(home: &EchoHome) -> Result<()> {
     );
     row(
         "sessions",
-        status.active_sessions.or(metrics.active_sessions).unwrap_or(0),
+        status
+            .active_sessions
+            .or(metrics.active_sessions)
+            .unwrap_or(0),
     );
     row(
         "latency",
-        format!(
-            "{:.1} ms",
-            metrics.latency_ms.unwrap_or_default()
-        ),
+        format!("{:.1} ms", metrics.latency_ms.unwrap_or_default()),
     );
     row(
         "capacity",
@@ -155,9 +149,7 @@ pub async fn cmd_status(home: &EchoHome) -> Result<()> {
         format!("{:.2}", metrics.trust_score.unwrap_or_default()),
     );
     if warming {
-        println!(
-            "  note: /metrics still warming up (503 until the first heartbeat sample)"
-        );
+        println!("  note: /metrics still warming up (503 until the first heartbeat sample)");
     }
     Ok(())
 }
@@ -210,10 +202,7 @@ pub async fn cmd_doctor(home: &EchoHome) -> Result<()> {
             Verdict::Pass,
             format!("config home writable — {}", home.dir.display()),
         )),
-        Err(e) => results.push((
-            Verdict::Fail,
-            format!("config home not writable — {:#}", e),
-        )),
+        Err(e) => results.push((Verdict::Fail, format!("config home not writable — {:#}", e))),
     }
 
     // 2. Identity file: present, parses, owner-only perms, has a peer id.
@@ -302,7 +291,10 @@ pub async fn cmd_doctor(home: &EchoHome) -> Result<()> {
     } else {
         results.push((
             Verdict::Warn,
-            format!("logs dir absent — {} (created on startup)", log_dir.display()),
+            format!(
+                "logs dir absent — {} (created on startup)",
+                log_dir.display()
+            ),
         ));
     }
     let log = home.daemon_log_path();
@@ -315,7 +307,10 @@ pub async fn cmd_doctor(home: &EchoHome) -> Result<()> {
     } else {
         results.push((
             Verdict::Warn,
-            format!("log file absent — {} (created on first start)", log.display()),
+            format!(
+                "log file absent — {} (created on first start)",
+                log.display()
+            ),
         ));
     }
 
@@ -378,7 +373,10 @@ fn check_identity(home: &EchoHome) -> (Verdict, String) {
         if mode & 0o077 != 0 {
             return (
                 Verdict::Warn,
-                format!("identity permissions {mode:o} — should be 600 ({})", path.display()),
+                format!(
+                    "identity permissions {mode:o} — should be 600 ({})",
+                    path.display()
+                ),
             );
         }
     }
@@ -420,10 +418,7 @@ async fn check_port(port: u16, daemon_running: bool) -> (Verdict, String) {
             Verdict::Warn,
             format!("port {port} free — daemon not listening"),
         ),
-        (false, true) => (
-            Verdict::Pass,
-            format!("port {port} bound by the daemon"),
-        ),
+        (false, true) => (Verdict::Pass, format!("port {port} bound by the daemon")),
         (false, false) => (
             Verdict::Fail,
             format!("port {port} in use by another process"),
