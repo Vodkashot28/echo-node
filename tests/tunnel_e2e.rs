@@ -444,6 +444,145 @@ async fn stalled_handshake_is_timed_out_and_counted() {
     listener_task.abort();
 }
 
+/// Pre-handshake input validation, driven straight against the tunnel
+/// listener with raw TCP: a lying length field (u32::MAX), a just-over-cap
+/// session_id (257 > 256), a just-over-cap peer_id (513 > 512), and
+/// non-UTF-8 session bytes. Each must be rejected without honoring the
+/// claimed buffer sizes, counted as a handshake failure, and the
+/// connection closed promptly with no provider data sent back.
+#[tokio::test]
+async fn malformed_preambles_are_rejected_and_counted() {
+    let dir = TempDir::new().unwrap();
+    let provider =
+        NodeIdentity::load_or_generate(&dir.path().join("provider.json"), "us-test").unwrap();
+    let provider_peer_id: libp2p::PeerId = provider.peer_id_str().parse().unwrap();
+
+    let db_path = format!("sqlite:{}", dir.path().join("preamble.db").display());
+    let backend = Arc::new(SqliteStore::new(&db_path).await.unwrap());
+    let availability = Arc::new(RwLock::new(AvailabilityEngine::new(100.0, 100.0, 10)));
+    let (metering, _receipt_rx) = MeteringEngine::with_config(provider.clone(), 1, 0);
+    let security = Arc::new(SecurityCounters::default());
+    let relay_config = RelayConfig {
+        backend: backend.clone(),
+        metering: metering.clone(),
+        availability: availability.clone(),
+        target_addr: "127.0.0.1:1".to_string(), // never reached
+        local_peer_id: provider.peer_id_str().to_string(),
+        identity: None,
+        max_upload_mbps: 10.0,
+        max_download_mbps: 10.0,
+        policy: None,
+        security: security.clone(),
+        handshake_timeout_ms: 3000,
+        enable_session_tickets: false,
+    };
+    let (provider_svc, _events) = TunnelService::new(
+        provider_peer_id,
+        metering.clone(),
+        availability.clone(),
+        relay_config,
+        4,
+        provider.noise_secret_key_bytes().to_vec(),
+    );
+
+    let tunnel_addr = format!("127.0.0.1:{}", free_port().await);
+    let accept_config = RelayConfig {
+        backend: provider_svc.relay_config().backend.clone(),
+        metering: provider_svc.relay_config().metering.clone(),
+        availability: provider_svc.relay_config().availability.clone(),
+        target_addr: provider_svc.relay_config().target_addr.clone(),
+        local_peer_id: provider_svc.relay_config().local_peer_id.clone(),
+        identity: provider_svc.relay_config().identity.clone(),
+        max_upload_mbps: provider_svc.relay_config().max_upload_mbps,
+        max_download_mbps: provider_svc.relay_config().max_download_mbps,
+        policy: None,
+        security: provider_svc.relay_config().security.clone(),
+        handshake_timeout_ms: provider_svc.relay_config().handshake_timeout_ms,
+        enable_session_tickets: false,
+    };
+    let listener_addr = tunnel_addr.clone();
+    let listener_task = tokio::spawn(async move {
+        TunnelService::accept_incoming(
+            &listener_addr,
+            provider_svc.event_tx().clone(),
+            accept_config,
+            provider_svc.conn_semaphore(),
+            provider_svc.static_private_key(),
+        )
+        .await
+        .expect("tunnel listener should bind");
+    });
+
+    // Write raw bytes, expect the provider to drop the connection promptly
+    // (clean FIN or RST — but never provider data), and without hanging.
+    async fn send_raw_and_expect_close(addr: &str, payload: &[u8]) {
+        let mut client = None;
+        for attempt in 0..5 {
+            match tokio::net::TcpStream::connect(addr).await {
+                Ok(s) => {
+                    client = Some(s);
+                    break;
+                }
+                Err(_) => {
+                    assert!(attempt < 4, "listener never became reachable");
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
+        let mut client = client.expect("connect to tunnel listener");
+        client.write_all(payload).await.expect("write raw preamble");
+        let mut buf = [0u8; 16];
+        let closed = tokio::time::timeout(Duration::from_secs(3), client.read(&mut buf))
+            .await
+            .expect("malformed preamble must be closed promptly");
+        match closed {
+            Ok(0) | Err(_) => {}
+            Ok(n) => panic!("provider replied with {n} bytes to a malformed preamble"),
+        }
+    }
+
+    // 1. Lying length field: claims a 4 GiB session_id, sends nothing more.
+    //    The provider must bail on the 256-byte cap — never allocate the
+    //    claimed size.
+    send_raw_and_expect_close(&tunnel_addr, &4_294_967_295u32.to_be_bytes()).await;
+
+    // 2. Just over the session_id cap (257 > 256): boundary precision matters.
+    let mut over_session = 257u32.to_be_bytes().to_vec();
+    over_session.extend(vec![b'a'; 257]);
+    send_raw_and_expect_close(&tunnel_addr, &over_session).await;
+
+    // 3. Just over the peer_id cap (513 > 512), with a valid session first.
+    let mut over_peer = 2u32.to_be_bytes().to_vec();
+    over_peer.extend(b"ss");
+    over_peer.extend(513u32.to_be_bytes());
+    over_peer.extend(vec![b'b'; 513]);
+    send_raw_and_expect_close(&tunnel_addr, &over_peer).await;
+
+    // 4. Non-UTF-8 session bytes under the cap: encoding validation, not
+    //    just length validation.
+    let mut bad_utf8 = 2u32.to_be_bytes().to_vec();
+    bad_utf8.extend([0xFF, 0xFE]);
+    send_raw_and_expect_close(&tunnel_addr, &bad_utf8).await;
+
+    // All four rejections must be attributed as handshake failures.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let snap = security.snapshot();
+    assert!(
+        snap.handshake_failures >= 4,
+        "every malformed preamble must count as a handshake failure: {snap:?}"
+    );
+    let events = security.recent_events(16);
+    assert!(
+        events.iter().any(|e| e.kind == "handshake_failure"),
+        "event ring should record the preambles: {events:?}"
+    );
+    // And nothing else: validation is not a key mismatch or a replay.
+    assert_eq!(snap.invalid_key_rejections, 0, "{snap:?}");
+    assert_eq!(snap.replay_attempts, 0, "{snap:?}");
+
+    listener_task.abort();
+}
+
 /// Soft-slashing gate wiring: with `POLICY_MIN_ACCOUNTABILITY` active, an
 /// unknown peer (fresh DB ⇒ composite score 0.0) must be denied **after**
 /// the Noise handshake completes, counted as a policy rejection, and have a

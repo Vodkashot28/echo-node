@@ -86,7 +86,7 @@ pub struct EncryptedTunnelSession {
 
 pub struct TunnelService {
     local_peer_id: libp2p::PeerId,
-    event_tx: mpsc::UnboundedSender<TunnelEvent>,
+    event_tx: mpsc::Sender<TunnelEvent>,
     metering: MeteringEngine,
     availability: Arc<RwLock<AvailabilityEngine>>,
     relay_config: RelayConfig,
@@ -158,6 +158,14 @@ pub enum TunnelEvent {
 }
 
 impl TunnelService {
+    /// Session-event channel depth. Events are lightweight and consumed by
+    /// the daemon's event-handler task; a full channel means that handler
+    /// has stalled, and further events are dropped (with a warning) rather
+    /// than accumulating unbounded memory or stalling the accept loop.
+    /// Metering correctness does not depend on these events: every code
+    /// path calls `end_session` directly before sending.
+    pub const EVENT_CHANNEL_CAPACITY: usize = 64;
+
     pub fn new(
         local_peer_id: libp2p::PeerId,
         metering: MeteringEngine,
@@ -165,8 +173,8 @@ impl TunnelService {
         relay_config: RelayConfig,
         max_connections: usize,
         static_private_key: Vec<u8>,
-    ) -> (Self, mpsc::UnboundedReceiver<TunnelEvent>) {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+    ) -> (Self, mpsc::Receiver<TunnelEvent>) {
+        let (event_tx, event_rx) = mpsc::channel(Self::EVENT_CHANNEL_CAPACITY);
         (
             Self {
                 local_peer_id,
@@ -197,7 +205,7 @@ impl TunnelService {
     }
 
     /// Get a clone of the event sender for use by the incoming listener.
-    pub fn event_tx(&self) -> &mpsc::UnboundedSender<TunnelEvent> {
+    pub fn event_tx(&self) -> &mpsc::Sender<TunnelEvent> {
         &self.event_tx
     }
 
@@ -417,10 +425,15 @@ impl TunnelService {
                 .await
                 .insert(session_id.to_string(), ());
 
-            let _ = self.event_tx.send(TunnelEvent::SessionEstablished {
+            if let Err(e) = self.event_tx.try_send(TunnelEvent::SessionEstablished {
                 session_id: session_id.to_string(),
                 remote_peer_id,
-            });
+            }) {
+                // Event-handler task gone or stalled — metering and
+                // session state are NOT affected (recorded above), only
+                // the informational event is lost.
+                warn!(session = session_id, error = %e, "session-established event dropped (consumer stalled or gone)");
+            }
 
             info!(session = session_id, "encrypted tunnel established");
 
@@ -534,7 +547,7 @@ impl TunnelService {
     /// Listen for incoming tunnel connections (provider side).
     pub async fn accept_incoming(
         listen_addr: &str,
-        event_tx: mpsc::UnboundedSender<TunnelEvent>,
+        event_tx: mpsc::Sender<TunnelEvent>,
         config: RelayConfig,
         conn_semaphore: Arc<Semaphore>,
         static_private_key: Vec<u8>,
@@ -580,7 +593,7 @@ impl TunnelService {
     async fn handle_incoming_connection(
         mut stream: TcpStream,
         addr: std::net::SocketAddr,
-        event_tx: mpsc::UnboundedSender<TunnelEvent>,
+        event_tx: mpsc::Sender<TunnelEvent>,
         config: RelayConfig,
         conn_semaphore: Arc<Semaphore>,
         static_private_key: Vec<u8>,
@@ -1035,12 +1048,16 @@ impl TunnelService {
             warn!(error = %e, session = %session_id, "failed to finalize metered session");
         }
 
-        let _ = event_tx.send(TunnelEvent::SessionClosed {
+        if let Err(e) = event_tx.try_send(TunnelEvent::SessionClosed {
             session_id: session_id.clone(),
             bytes_sent,
             bytes_received,
             details: Some(close_details),
-        });
+        }) {
+            // Metered finalization + reputation already handled above;
+            // only the informational event is lost.
+            warn!(session = %session_id, error = %e, "session-closed event dropped (consumer stalled or gone)");
+        }
 
         info!(
             session = %session_id,

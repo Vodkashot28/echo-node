@@ -468,10 +468,24 @@ fn clear_spool(path: &Path) {
 }
 
 /// Sender half of the telemetry bridge. Clonable; one instance per daemon.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DashboardReporter {
     tx: mpsc::Sender<ReporterMessage>,
     shutdown_tx: watch::Sender<bool>,
+    /// The posting task's handle — held only by the original reporter.
+    /// Clones receive `None`: they keep pushing/signal rights but cannot
+    /// await the drain (JoinHandle is not Clone).
+    task_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Clone for DashboardReporter {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            shutdown_tx: self.shutdown_tx.clone(),
+            task_handle: None,
+        }
+    }
 }
 
 impl DashboardReporter {
@@ -480,7 +494,7 @@ impl DashboardReporter {
         let (tx, mut rx) = mpsc::channel::<ReporterMessage>(QUEUE_CAPACITY);
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let task_config = config.clone();
-        tokio::spawn(async move {
+        let report_task = tokio::spawn(async move {
             let client = match reqwest::Client::builder()
                 .timeout(Duration::from_secs(POST_TIMEOUT_SECS))
                 .build()
@@ -614,7 +628,11 @@ impl DashboardReporter {
                 }
             }
         });
-        Self { tx, shutdown_tx }
+        Self {
+            tx,
+            shutdown_tx,
+            task_handle: Some(report_task),
+        }
     }
 
     /// Queue a frame without blocking the heartbeat. Frames are dropped on
@@ -633,6 +651,23 @@ impl DashboardReporter {
     /// has already exited.
     pub fn shutdown(&self) -> bool {
         self.shutdown_tx.send(true).is_ok()
+    }
+
+    /// Signal the reporting task to drain (final delivery + spool) and
+    /// time-box its exit. Consumes the reporter. Returns `true` when the
+    /// task finished within `timeout`; `false` when it never started or
+    /// hit the deadline (unsent frames are already spooled per its final
+    /// delivery step regardless).
+    pub async fn shutdown_drain(mut self, timeout: Duration) -> bool {
+        let signaled = self.shutdown_tx.send(true).is_ok();
+        let Some(handle) = self.task_handle.take() else {
+            return false;
+        };
+        let finished = matches!(tokio::time::timeout(timeout, handle).await, Ok(Ok(())));
+        if !signaled {
+            warn!("dashboard telemetry task was already gone at shutdown");
+        }
+        finished
     }
 
     fn try_send(&self, message: ReporterMessage) {

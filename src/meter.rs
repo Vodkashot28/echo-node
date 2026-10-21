@@ -99,7 +99,7 @@ pub struct MeteredSession {
 pub struct MeteringEngine {
     identity: NodeIdentity,
     sessions: Arc<RwLock<HashMap<String, MeteredSession>>>,
-    receipt_tx: mpsc::UnboundedSender<StateReceipt>,
+    receipt_tx: mpsc::Sender<StateReceipt>,
     /// Issue a receipt every N packets (default: 100).
     receipt_interval_packets: u64,
     /// Issue a receipt if a single chunk exceeds this many bytes (default: 1MB).
@@ -107,7 +107,13 @@ pub struct MeteringEngine {
 }
 
 impl MeteringEngine {
-    pub fn new(identity: NodeIdentity) -> (Self, mpsc::UnboundedReceiver<StateReceipt>) {
+    /// Receipt channel depth: enough to absorb bursts while the
+    /// settlement task persists earlier receipts, small enough that a
+    /// stalled consumer surfaces as producer backpressure instead of
+    /// unbounded memory growth.
+    pub const RECEIPT_CHANNEL_CAPACITY: usize = 1024;
+
+    pub fn new(identity: NodeIdentity) -> (Self, mpsc::Receiver<StateReceipt>) {
         Self::with_config(identity, 100, 1_000_000)
     }
 
@@ -116,8 +122,8 @@ impl MeteringEngine {
         identity: NodeIdentity,
         receipt_interval_packets: u64,
         receipt_min_bytes: u64,
-    ) -> (Self, mpsc::UnboundedReceiver<StateReceipt>) {
-        let (receipt_tx, receipt_rx) = mpsc::unbounded_channel();
+    ) -> (Self, mpsc::Receiver<StateReceipt>) {
+        let (receipt_tx, receipt_rx) = mpsc::channel(Self::RECEIPT_CHANNEL_CAPACITY);
         (
             Self {
                 identity,
@@ -159,24 +165,40 @@ impl MeteringEngine {
         direction: &str,
         bytes: u64,
     ) -> Result<()> {
-        let mut sessions = self.sessions.write().await;
-        let session = sessions.get_mut(session_id).context("session not found")?;
+        // All mutating bookkeeping (including receipt creation and the
+        // receipts_issued counter) happens while the sessions lock is held,
+        // but the channel send runs AFTER the guard is released — a full
+        // bounded channel blocks this caller only, never every other
+        // session sharing the lock.
+        let send_receipt = {
+            let mut sessions = self.sessions.write().await;
+            let session = sessions.get_mut(session_id).context("session not found")?;
 
-        match direction {
-            "egress" => session.bytes_sent += bytes,
-            "ingress" => session.bytes_received += bytes,
-            _ => return Err(anyhow::anyhow!("invalid direction: {}", direction)),
-        }
+            match direction {
+                "egress" => session.bytes_sent += bytes,
+                "ingress" => session.bytes_received += bytes,
+                _ => return Err(anyhow::anyhow!("invalid direction: {}", direction)),
+            }
 
-        session.sequence_counter += 1;
+            session.sequence_counter += 1;
 
-        // Issue receipt at configured intervals
-        if session.sequence_counter % self.receipt_interval_packets == 0
-            || bytes > self.receipt_min_bytes
-        {
-            let receipt = self.create_receipt(session).await?;
-            session.receipts_issued += 1;
-            let _ = self.receipt_tx.send(receipt);
+            // Issue receipt at configured intervals
+            if session.sequence_counter % self.receipt_interval_packets == 0
+                || bytes > self.receipt_min_bytes
+            {
+                let receipt = self.create_receipt(session).await?;
+                session.receipts_issued += 1;
+                Some(receipt)
+            } else {
+                None
+            }
+        };
+
+        if let Some(receipt) = send_receipt {
+            self.receipt_tx
+                .send(receipt)
+                .await
+                .map_err(|_| anyhow::anyhow!("receipt channel closed (settlement task gone)"))?;
         }
 
         Ok(())
@@ -225,13 +247,26 @@ impl MeteringEngine {
         Ok(receipt)
     }
 
-    /// Finalize a session and issue final receipt
+    /// Finalize a session and issue final receipt.
+    ///
+    /// The channel send runs after the sessions lock is released so the
+    /// (bounded) receipt channel can apply backpressure without blocking
+    /// other sessions' bookkeeping. The send is unblocked by the settled
+    /// consumer; if the settlement task is gone, the final receipt is
+    /// still returned to the caller, which persists it directly.
     pub async fn end_session(&self, session_id: &str) -> Result<StateReceipt> {
-        let mut sessions = self.sessions.write().await;
-        let session = sessions.remove(session_id).context("session not found")?;
+        let (session, receipt) = {
+            let mut sessions = self.sessions.write().await;
+            let session = sessions.remove(session_id).context("session not found")?;
 
-        let receipt = self.create_receipt(&session).await?;
-        let _ = self.receipt_tx.send(receipt.clone());
+            let receipt = self.create_receipt(&session).await?;
+            (session, receipt)
+        };
+
+        self.receipt_tx
+            .send(receipt.clone())
+            .await
+            .map_err(|_| anyhow::anyhow!("receipt channel closed (settlement task gone)"))?;
 
         info!(
             session = session_id,

@@ -1992,7 +1992,7 @@ async fn run_daemon() -> Result<()> {
     // Created before the background tasks so both the heartbeat (metrics) and
     // the tunnel event handler (session federation) can push real data to the
     // echomesh control plane.
-    let reporter = match DashboardConfig::from_env() {
+    let mut reporter = match DashboardConfig::from_env() {
         Some(cfg) => {
             info!(
                 url = %redact_url_credentials(&cfg.url),
@@ -2486,7 +2486,9 @@ async fn run_daemon() -> Result<()> {
     // Providers alone settle receipts: a consumer never issues authoritative
     // receipts for traffic it merely forwards, so there is nothing to settle
     // in consumer mode (and no stray consumer-signed rows to persist).
-    let shutdown_tx = if config.node_mode == "provider" {
+    // Returns (shutdown signal for the receipt task, its JoinHandle for a
+    // time-boxed drain on shutdown). Consumer mode runs neither task.
+    let (shutdown_tx, receipt_settlement_handle) = if config.node_mode == "provider" {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
         let mut receipt_rx_task = receipt_rx;
         let receipt_backend = backend.clone();
@@ -2510,7 +2512,7 @@ async fn run_daemon() -> Result<()> {
             String,
             u64,
         >::new()));
-        tokio::spawn(async move {
+        let receipt_settlement_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     biased;
@@ -2638,9 +2640,9 @@ async fn run_daemon() -> Result<()> {
             }
         });
 
-        Some(shutdown_tx)
+        (Some(shutdown_tx), Some(receipt_settlement_handle))
     } else {
-        None
+        (None, None)
     };
 
     // Step 9.45: Marketplace DHT sync (G6) — publish what only we can:
@@ -3046,18 +3048,31 @@ async fn run_daemon() -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    // Signal shutdown to receipt settlement task (flush remaining receipts)
-    if let Some(shutdown_tx) = shutdown_tx {
+    // Signal shutdown to the receipt settlement task and time-box its
+    // drain: the task flushes any remaining receipts before exiting, and
+    // awaiting its handle replaces the old fixed 1s sleep with a real
+    // deadline on completion.
+    if let Some(shutdown_tx) = &shutdown_tx {
         let _ = shutdown_tx.send(true);
-        // Give the drain a moment to complete
-        sleep(Duration::from_secs(1)).await;
+    }
+    if let Some(handle) = receipt_settlement_handle {
+        match tokio::time::timeout(Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => debug!("receipt settlement drained cleanly before shutdown completed"),
+            Ok(Err(e)) => warn!(error = %e, "receipt settlement task panicked during drain"),
+            Err(_) => warn!(
+                "receipt settlement drain deadline exceeded; already-flushed receipts persist in the DB"
+            ),
+        }
     }
 
     // Time-boxed final dashboard telemetry flush; unsent frames are spooled
-    // to disk and replayed on the next boot.
-    if let Some(reporter) = &reporter {
-        reporter.shutdown();
-        sleep(Duration::from_secs(1)).await;
+    // to disk and replayed on the next boot. Await the reporter's task
+    // handle (bounded by the drain itself) instead of a fixed sleep, so a
+    // slow last-page push gets a genuine chance to land.
+    if let Some(reporter) = reporter.take() {
+        if !reporter.shutdown_drain(Duration::from_secs(10)).await {
+            warn!("dashboard telemetry reporter hit its shutdown drain deadline; unsent frames are spooled for next boot");
+        }
     }
 
     // Bounded wait for the ledger writer to finish draining its queue
